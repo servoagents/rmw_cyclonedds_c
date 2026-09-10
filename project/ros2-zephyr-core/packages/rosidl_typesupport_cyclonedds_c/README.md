@@ -1,0 +1,26 @@
+# Cyclone DDS C ROSIDL type support
+
+This experimental Kilted generator turns ROS IDL into fixed-size Cyclone DDS C
+type support. It deliberately composes existing tools:
+
+1. `rosidl_generator_dds_idl` produces the official ROS-to-DDS IDL mapping.
+2. Cyclone `idlc_generate()` produces DDS C types, descriptors, and serializer
+   metadata.
+3. This package generates explicit ROS C↔DDS C field converters and a standard
+   `rosidl_message_type_support_t` handle.
+
+The accepted Phase 4 profile supports basic scalar members, fixed arrays of
+basic or nested message types, and nested fixed-size messages. Strings,
+sequences, and other variable-size members fail at generation time. Services
+and actions are not generated.
+
+Build and test it from the lab root with:
+
+```sh
+scripts/phase4.sh all
+```
+
+The package is registered in the `rosidl_typesupport_c` resource index, so an
+interface package that finds it before `rosidl_generate_interfaces()` receives
+the custom target automatically. This implementation is currently validated
+only in the pinned Linux container; the Zephyr cross-build remains next.

@@ -13,6 +13,9 @@ find_package(rcl REQUIRED)
 find_package(rclc REQUIRED)
 find_package(rmw REQUIRED)
 find_package(rosidl_runtime_c REQUIRED)
+find_package(rosidl_typesupport_c REQUIRED)
+find_package(rosidl_typesupport_cyclonedds_c QUIET)
+find_package(phase4_test_msgs QUIET)
 find_package(std_msgs REQUIRED)
 
 idlc_generate(
@@ -32,7 +35,14 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
   CycloneDDS::ddsc
   rmw::rmw
   rosidl_runtime_c::rosidl_runtime_c
+  rosidl_typesupport_c::rosidl_typesupport_c
   ${std_msgs_TARGETS})
+if(rosidl_typesupport_cyclonedds_c_FOUND)
+  target_compile_definitions(${PROJECT_NAME} PRIVATE
+    RMW_CYCLONEDDS_C_HAS_GENERATED_TYPESUPPORT=1)
+  target_link_libraries(${PROJECT_NAME} PRIVATE
+    rosidl_typesupport_cyclonedds_c::rosidl_typesupport_cyclonedds_c)
+endif()
 
 add_executable(phase3_trace_minimal_rclc
   test/trace_minimal_rclc.c)
@@ -40,10 +50,19 @@ add_executable(phase3_interop_rclc
   test/interop_rclc.c)
 add_executable(phase3_contract_negative
   test/contract_negative.c)
-foreach(test_target
+set(_rmw_test_targets
     phase3_trace_minimal_rclc
     phase3_interop_rclc
     phase3_contract_negative)
+if(phase4_test_msgs_FOUND AND rosidl_typesupport_cyclonedds_c_FOUND)
+  add_executable(phase4_generated_rmw
+    test/generated_rmw.c)
+  add_executable(phase4_generated_interop_rclc
+    test/generated_interop_rclc.c)
+  list(APPEND _rmw_test_targets
+    phase4_generated_rmw phase4_generated_interop_rclc)
+endif()
+foreach(test_target ${_rmw_test_targets})
   target_compile_options(${test_target} PRIVATE
     -Wall -Wextra -Wconversion -Werror)
   target_link_libraries(${test_target} PRIVATE
@@ -51,12 +70,12 @@ foreach(test_target
     rclc::rclc
     rmw::rmw
     ${std_msgs_TARGETS})
+  if(phase4_test_msgs_FOUND)
+    target_link_libraries(${test_target} PRIVATE ${phase4_test_msgs_TARGETS})
+  endif()
 endforeach()
 
-install(TARGETS
-  phase3_trace_minimal_rclc
-  phase3_interop_rclc
-  phase3_contract_negative
+install(TARGETS ${_rmw_test_targets}
   DESTINATION lib/${PROJECT_NAME})
 install(TARGETS ${PROJECT_NAME}
   EXPORT export_${PROJECT_NAME}

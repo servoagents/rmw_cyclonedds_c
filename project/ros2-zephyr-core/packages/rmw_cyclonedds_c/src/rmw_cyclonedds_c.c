@@ -2,12 +2,14 @@
 #include <inttypes.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include <dds/dds.h>
 #include <rcutils/allocator.h>
+#include <rcutils/error_handling.h>
 #include <rmw/discovery_options.h>
 #include <rmw/enclave.h>
 #include <rmw/error_handling.h>
@@ -16,6 +18,24 @@
 #include <rmw/rmw.h>
 #include <rmw/security_options.h>
 #include <rosidl_runtime_c/message_type_support_struct.h>
+#include <rosidl_typesupport_c/message_type_support_dispatch.h>
+#ifdef RMW_CYCLONEDDS_C_HAS_GENERATED_TYPESUPPORT
+#include <rosidl_typesupport_cyclonedds_c/identifier.h>
+#include <rosidl_typesupport_cyclonedds_c/message_type_support.h>
+#else
+typedef bool (* rosidl_typesupport_cyclonedds_c__convert_fn)(
+  const void * source, void * destination);
+typedef struct rosidl_typesupport_cyclonedds_c__message_type_support_callbacks_s
+{
+  const char * ros_type_name;
+  const char * dds_type_name;
+  const dds_topic_descriptor_t * descriptor;
+  size_t ros_size;
+  size_t dds_size;
+  rosidl_typesupport_cyclonedds_c__convert_fn ros_to_dds;
+  rosidl_typesupport_cyclonedds_c__convert_fn dds_to_ros;
+} rosidl_typesupport_cyclonedds_c__message_type_support_callbacks_t;
+#endif
 #include <std_msgs/msg/u_int32.h>
 
 #include "UInt32_.h"
@@ -29,6 +49,9 @@ typedef struct endpoint_data_s
   dds_entity_t endpoint;
   dds_entity_t condition;
   rmw_qos_profile_t qos;
+  const rosidl_typesupport_cyclonedds_c__message_type_support_callbacks_t * type_support;
+  void * dds_sample;
+  atomic_flag sample_lock;
 } endpoint_data_t;
 
 typedef struct wait_set_data_s
@@ -98,21 +121,79 @@ static rmw_ret_t map_dds_result(dds_return_t result, const char * operation)
   return RMW_RET_ERROR;
 }
 
-static bool is_uint32_type(const rosidl_message_type_support_t * type_support)
+static bool legacy_uint32_ros_to_dds(const void * ros_message, void * dds_message)
 {
-  if (type_support == NULL || type_support->get_type_description_func == NULL) {
-    RMW_SET_ERROR_MSG("message type support has no type description");
+  if (ros_message == NULL || dds_message == NULL) {
     return false;
+  }
+  ((std_msgs_msg_dds__UInt32_ *)dds_message)->data_ =
+    ((const std_msgs__msg__UInt32 *)ros_message)->data;
+  return true;
+}
+
+static bool legacy_uint32_dds_to_ros(const void * dds_message, void * ros_message)
+{
+  if (ros_message == NULL || dds_message == NULL) {
+    return false;
+  }
+  ((std_msgs__msg__UInt32 *)ros_message)->data =
+    ((const std_msgs_msg_dds__UInt32_ *)dds_message)->data_;
+  return true;
+}
+
+static const rosidl_typesupport_cyclonedds_c__message_type_support_callbacks_t
+legacy_uint32_type_support = {
+  "std_msgs/msg/UInt32",
+  "std_msgs::msg::dds_::UInt32_",
+  &std_msgs_msg_dds__UInt32__desc,
+  sizeof(std_msgs__msg__UInt32),
+  sizeof(std_msgs_msg_dds__UInt32_),
+  &legacy_uint32_ros_to_dds,
+  &legacy_uint32_dds_to_ros,
+};
+
+static const rosidl_typesupport_cyclonedds_c__message_type_support_callbacks_t *
+resolve_type_support(const rosidl_message_type_support_t * type_support)
+{
+  if (type_support == NULL) {
+    RMW_SET_ERROR_MSG("message type support is null");
+    return NULL;
+  }
+#ifdef RMW_CYCLONEDDS_C_HAS_GENERATED_TYPESUPPORT
+  const rosidl_message_type_support_t * cyclonedds_support =
+    rosidl_typesupport_c__get_message_typesupport_handle_function(
+    type_support, rosidl_typesupport_cyclonedds_c__identifier);
+  if (cyclonedds_support != NULL && cyclonedds_support->data != NULL) {
+    rcutils_reset_error();
+    return cyclonedds_support->data;
+  }
+  rcutils_reset_error();
+#endif
+  if (type_support->get_type_description_func == NULL) {
+    RMW_SET_ERROR_MSG("message type support has no type description");
+    return NULL;
   }
   const rosidl_runtime_c__type_description__TypeDescription * description =
     type_support->get_type_description_func(type_support);
-  if (description == NULL || description->type_description.type_name.data == NULL ||
-    strcmp(description->type_description.type_name.data, "std_msgs/msg/UInt32") != 0)
+  if (description != NULL && description->type_description.type_name.data != NULL &&
+    strcmp(description->type_description.type_name.data, "std_msgs/msg/UInt32") == 0)
   {
-    RMW_SET_ERROR_MSG("only std_msgs/msg/UInt32 is supported by the Phase 3 profile");
-    return false;
+    return &legacy_uint32_type_support;
   }
-  return true;
+  RMW_SET_ERROR_MSG(
+    "type has no generated rosidl_typesupport_cyclonedds_c fixed-size adapter");
+  return NULL;
+}
+
+static void lock_sample(endpoint_data_t * endpoint)
+{
+  while (atomic_flag_test_and_set_explicit(&endpoint->sample_lock, memory_order_acquire)) {
+  }
+}
+
+static void unlock_sample(endpoint_data_t * endpoint)
+{
+  atomic_flag_clear_explicit(&endpoint->sample_lock, memory_order_release);
 }
 
 static bool qos_is_supported(const rmw_qos_profile_t * qos)
@@ -134,7 +215,39 @@ static bool qos_is_supported(const rmw_qos_profile_t * qos)
   return true;
 }
 
-static dds_qos_t * create_dds_qos(const rmw_qos_profile_t * qos)
+static bool set_type_hash_user_data(
+  dds_qos_t * dds_qos, const rosidl_message_type_support_t * type_support)
+{
+  if (type_support->get_type_hash_func == NULL) {
+    RMW_SET_ERROR_MSG("message type support has no type hash");
+    return false;
+  }
+  const rosidl_type_hash_t * type_hash = type_support->get_type_hash_func(type_support);
+  if (type_hash == NULL || type_hash->version == ROSIDL_TYPE_HASH_VERSION_UNSET) {
+    RMW_SET_ERROR_MSG("message type hash is unset");
+    return false;
+  }
+  char user_data[82];
+  const int prefix_length = snprintf(
+    user_data, sizeof(user_data), "typehash=RIHS%02u_", (unsigned int)type_hash->version);
+  if (prefix_length != 16) {
+    RMW_SET_ERROR_MSG("message type hash version cannot be encoded");
+    return false;
+  }
+  static const char hex[] = "0123456789abcdef";
+  size_t offset = (size_t)prefix_length;
+  for (size_t index = 0U; index < ROSIDL_TYPE_HASH_SIZE; ++index) {
+    user_data[offset++] = hex[type_hash->value[index] >> 4U];
+    user_data[offset++] = hex[type_hash->value[index] & 0x0fU];
+  }
+  user_data[offset++] = ';';
+  user_data[offset] = '\0';
+  dds_qset_userdata(dds_qos, user_data, offset);
+  return true;
+}
+
+static dds_qos_t * create_dds_qos(
+  const rmw_qos_profile_t * qos, const rosidl_message_type_support_t * type_support)
 {
   dds_qos_t * dds_qos = dds_create_qos();
   if (dds_qos == NULL) {
@@ -144,6 +257,10 @@ static dds_qos_t * create_dds_qos(const rmw_qos_profile_t * qos)
   dds_qset_history(dds_qos, DDS_HISTORY_KEEP_LAST, (int32_t)qos->depth);
   dds_qset_reliability(dds_qos, DDS_RELIABILITY_BEST_EFFORT, DDS_MSECS(0));
   dds_qset_durability(dds_qos, DDS_DURABILITY_VOLATILE);
+  if (!set_type_hash_user_data(dds_qos, type_support)) {
+    dds_delete_qos(dds_qos);
+    return NULL;
+  }
   return dds_qos;
 }
 
@@ -545,11 +662,13 @@ rmw_publisher_t * rmw_create_publisher(
   const rmw_publisher_options_t * options)
 {
   rmw_context_impl_t * context = context_impl_from_node(node);
+  const rosidl_typesupport_cyclonedds_c__message_type_support_callbacks_t * callbacks =
+    resolve_type_support(type_support);
   if (context == NULL || topic_name == NULL || options == NULL ||
     options->rmw_specific_publisher_payload != NULL ||
     options->require_unique_network_flow_endpoints !=
     RMW_UNIQUE_NETWORK_FLOW_ENDPOINTS_NOT_REQUIRED ||
-    !is_uint32_type(type_support) || !qos_is_supported(qos))
+    callbacks == NULL || !qos_is_supported(qos))
   {
     return NULL;
   }
@@ -560,13 +679,19 @@ rmw_publisher_t * rmw_create_publisher(
   }
   endpoint_data_t * endpoint = allocate_zeroed(&context->allocator, sizeof(*endpoint));
   char * dds_topic_name = make_dds_topic_name(&context->allocator, topic_name);
-  dds_qos_t * dds_qos = create_dds_qos(qos);
+  dds_qos_t * dds_qos = create_dds_qos(qos, type_support);
   if (endpoint == NULL || dds_topic_name == NULL || dds_qos == NULL) {
+    goto fail;
+  }
+  endpoint->type_support = callbacks;
+  endpoint->dds_sample = allocate_zeroed(&context->allocator, callbacks->dds_size);
+  atomic_flag_clear(&endpoint->sample_lock);
+  if (endpoint->dds_sample == NULL) {
     goto fail;
   }
   endpoint->qos = *qos;
   endpoint->topic = dds_create_topic(
-    context->participant, &std_msgs_msg_dds__UInt32__desc, dds_topic_name, NULL, NULL);
+    context->participant, callbacks->descriptor, dds_topic_name, NULL, NULL);
   if (endpoint->topic < 0) {
     (void)map_dds_result(endpoint->topic, "dds_create_topic");
     goto fail;
@@ -593,6 +718,9 @@ fail:
     if (endpoint->topic > 0) {
       (void)dds_delete(endpoint->topic);
     }
+    if (endpoint->dds_sample != NULL) {
+      context->allocator.deallocate(endpoint->dds_sample, context->allocator.state);
+    }
     context->allocator.deallocate(endpoint, context->allocator.state);
   }
   context->allocator.deallocate((void *)publisher->topic_name, context->allocator.state);
@@ -615,6 +743,7 @@ rmw_ret_t rmw_destroy_publisher(rmw_node_t * node, rmw_publisher_t * publisher)
   if (topic_result != RMW_RET_OK) {
     result = topic_result;
   }
+  context->allocator.deallocate(endpoint->dds_sample, context->allocator.state);
   context->allocator.deallocate(endpoint, context->allocator.state);
   context->allocator.deallocate((void *)publisher->topic_name, context->allocator.state);
   context->allocator.deallocate(publisher, context->allocator.state);
@@ -689,10 +818,18 @@ rmw_ret_t rmw_publish(
     RMW_SET_ERROR_MSG("publisher allocations are not supported");
     return RMW_RET_UNSUPPORTED;
   }
-  const std_msgs__msg__UInt32 * ros_sample = ros_message;
-  const std_msgs_msg_dds__UInt32_ dds_sample = {.data_ = ros_sample->data};
-  const endpoint_data_t * endpoint = publisher->data;
-  return map_dds_result(dds_write(endpoint->endpoint, &dds_sample), "dds_write");
+  endpoint_data_t * endpoint = publisher->data;
+  lock_sample(endpoint);
+  memset(endpoint->dds_sample, 0, endpoint->type_support->dds_size);
+  if (!endpoint->type_support->ros_to_dds(ros_message, endpoint->dds_sample)) {
+    unlock_sample(endpoint);
+    RMW_SET_ERROR_MSG("generated ROS-to-DDS conversion failed");
+    return RMW_RET_ERROR;
+  }
+  const rmw_ret_t result = map_dds_result(
+    dds_write(endpoint->endpoint, endpoint->dds_sample), "dds_write");
+  unlock_sample(endpoint);
+  return result;
 }
 
 static rmw_subscription_t * create_subscription_handle(
@@ -722,12 +859,14 @@ rmw_subscription_t * rmw_create_subscription(
   const rmw_subscription_options_t * options)
 {
   rmw_context_impl_t * context = context_impl_from_node(node);
+  const rosidl_typesupport_cyclonedds_c__message_type_support_callbacks_t * callbacks =
+    resolve_type_support(type_support);
   if (context == NULL || topic_name == NULL || options == NULL ||
     options->rmw_specific_subscription_payload != NULL || options->ignore_local_publications ||
     options->content_filter_options != NULL ||
     options->require_unique_network_flow_endpoints !=
     RMW_UNIQUE_NETWORK_FLOW_ENDPOINTS_NOT_REQUIRED ||
-    !is_uint32_type(type_support) || !qos_is_supported(qos))
+    callbacks == NULL || !qos_is_supported(qos))
   {
     return NULL;
   }
@@ -738,13 +877,19 @@ rmw_subscription_t * rmw_create_subscription(
   }
   endpoint_data_t * endpoint = allocate_zeroed(&context->allocator, sizeof(*endpoint));
   char * dds_topic_name = make_dds_topic_name(&context->allocator, topic_name);
-  dds_qos_t * dds_qos = create_dds_qos(qos);
+  dds_qos_t * dds_qos = create_dds_qos(qos, type_support);
   if (endpoint == NULL || dds_topic_name == NULL || dds_qos == NULL) {
+    goto fail;
+  }
+  endpoint->type_support = callbacks;
+  endpoint->dds_sample = allocate_zeroed(&context->allocator, callbacks->dds_size);
+  atomic_flag_clear(&endpoint->sample_lock);
+  if (endpoint->dds_sample == NULL) {
     goto fail;
   }
   endpoint->qos = *qos;
   endpoint->topic = dds_create_topic(
-    context->participant, &std_msgs_msg_dds__UInt32__desc, dds_topic_name, NULL, NULL);
+    context->participant, callbacks->descriptor, dds_topic_name, NULL, NULL);
   if (endpoint->topic < 0) {
     (void)map_dds_result(endpoint->topic, "dds_create_topic");
     goto fail;
@@ -779,6 +924,9 @@ fail:
     if (endpoint->topic > 0) {
       (void)dds_delete(endpoint->topic);
     }
+    if (endpoint->dds_sample != NULL) {
+      context->allocator.deallocate(endpoint->dds_sample, context->allocator.state);
+    }
     context->allocator.deallocate(endpoint, context->allocator.state);
   }
   context->allocator.deallocate((void *)subscription->topic_name, context->allocator.state);
@@ -803,6 +951,7 @@ rmw_ret_t rmw_destroy_subscription(rmw_node_t * node, rmw_subscription_t * subsc
   if (reader_result != RMW_RET_OK || topic_result != RMW_RET_OK) {
     result = RMW_RET_ERROR;
   }
+  context->allocator.deallocate(endpoint->dds_sample, context->allocator.state);
   context->allocator.deallocate(endpoint, context->allocator.state);
   context->allocator.deallocate((void *)subscription->topic_name, context->allocator.state);
   context->allocator.deallocate(subscription, context->allocator.state);
@@ -865,20 +1014,28 @@ rmw_ret_t rmw_take_with_info(
   }
 
   endpoint_data_t * endpoint = subscription->data;
-  std_msgs_msg_dds__UInt32_ dds_sample = {0};
-  void * samples[] = {&dds_sample};
+  lock_sample(endpoint);
+  memset(endpoint->dds_sample, 0, endpoint->type_support->dds_size);
+  void * samples[] = {endpoint->dds_sample};
   dds_sample_info_t sample_info;
   const dds_return_t take_result = dds_take(
     endpoint->endpoint, samples, &sample_info, 1U, 1U);
   if (take_result < 0) {
+    unlock_sample(endpoint);
     return map_dds_result(take_result, "dds_take");
   }
   if (take_result == 0 || !sample_info.valid_data) {
+    unlock_sample(endpoint);
     *taken = false;
     return RMW_RET_OK;
   }
 
-  ((std_msgs__msg__UInt32 *)ros_message)->data = dds_sample.data_;
+  if (!endpoint->type_support->dds_to_ros(endpoint->dds_sample, ros_message)) {
+    unlock_sample(endpoint);
+    RMW_SET_ERROR_MSG("generated DDS-to-ROS conversion failed");
+    return RMW_RET_ERROR;
+  }
+  unlock_sample(endpoint);
   *message_info = rmw_get_zero_initialized_message_info();
   message_info->source_timestamp = sample_info.source_timestamp;
   message_info->received_timestamp = dds_time();

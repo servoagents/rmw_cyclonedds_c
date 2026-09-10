@@ -12,6 +12,9 @@
   <depend>rclc</depend>
   <depend>rmw</depend>
   <depend>rosidl_runtime_c</depend>
+  <depend>rosidl_typesupport_c</depend>
+  <depend>rosidl_typesupport_cyclonedds_c</depend>
+  <depend>phase4_test_msgs</depend>
   <depend>std_msgs</depend>
 
   <export>
