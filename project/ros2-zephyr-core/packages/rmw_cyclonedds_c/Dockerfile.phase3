@@ -1,0 +1,17 @@
+FROM ros2-zephyr-kilted-peer:phase1
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+      ltrace=0.7.3-6.4ubuntu3 \
+      ros-kilted-rclc=6.2.3-1noble.20260813.052120 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /phase3_ws
+COPY . /phase3_ws/src/rmw_cyclonedds_c
+
+RUN . /opt/ros/kilted/setup.sh \
+    && colcon --log-base /phase3_ws/log build \
+      --build-base /phase3_ws/build \
+      --install-base /phase3_ws/install \
+      --packages-select rmw_cyclonedds_c \
+      --cmake-args -DCMAKE_BUILD_TYPE=RelWithDebInfo
