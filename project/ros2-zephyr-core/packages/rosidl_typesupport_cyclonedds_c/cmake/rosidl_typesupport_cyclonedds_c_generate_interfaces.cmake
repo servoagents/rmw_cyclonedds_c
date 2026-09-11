@@ -1,3 +1,12 @@
+if(DEFINED ROSIDL_TYPESUPPORT_CYCLONEDDS_C_GENERATE_PACKAGES AND
+    NOT ROSIDL_TYPESUPPORT_CYCLONEDDS_C_GENERATE_PACKAGES STREQUAL "")
+  list(FIND ROSIDL_TYPESUPPORT_CYCLONEDDS_C_GENERATE_PACKAGES
+    "${PROJECT_NAME}" _cyclonedds_package_index)
+  if(_cyclonedds_package_index EQUAL -1)
+    return()
+  endif()
+endif()
+
 if(NOT TARGET ${rosidl_generate_interfaces_TARGET}__rosidl_generator_c)
   message(FATAL_ERROR
     "The rosidl_generator_c extension must run before rosidl_typesupport_cyclonedds_c")
@@ -17,6 +26,7 @@ rosidl_generate_dds_interfaces(${_dds_idl_target}
 
 set(_dds_output_base
   "${CMAKE_CURRENT_BINARY_DIR}/rosidl_generator_dds_idl/${PROJECT_NAME}")
+file(MAKE_DIRECTORY "${_dds_output_base}")
 set(_dds_idl_files "")
 set(_generated_files "")
 set(_output_path
@@ -40,6 +50,7 @@ idlc_generate(
   FILES ${_dds_idl_files}
   BASE_DIR "${CMAKE_CURRENT_BINARY_DIR}/rosidl_generator_dds_idl"
   INCLUDES "${CMAKE_CURRENT_BINARY_DIR}/rosidl_generator_dds_idl"
+  FEATURES case-sensitive
   WARNINGS no-implicit-extensibility
   DEPENDS ${_dds_idl_target})
 
@@ -83,7 +94,12 @@ add_custom_command(
   VERBATIM)
 
 set(_target_suffix "__rosidl_typesupport_cyclonedds_c")
-add_library(${rosidl_generate_interfaces_TARGET}${_target_suffix} SHARED
+set(_generated_typesupport_library_type SHARED)
+if(ROS2_ZEPHYR_STATIC_BUILD)
+  set(_generated_typesupport_library_type STATIC)
+endif()
+add_library(${rosidl_generate_interfaces_TARGET}${_target_suffix}
+  ${_generated_typesupport_library_type}
   ${_generated_files})
 target_compile_options(${rosidl_generate_interfaces_TARGET}${_target_suffix} PRIVATE
   -Wall -Wextra -Wconversion -Werror)
@@ -93,7 +109,7 @@ target_include_directories(${rosidl_generate_interfaces_TARGET}${_target_suffix}
   "$<INSTALL_INTERFACE:include/${PROJECT_NAME}>")
 target_link_libraries(${rosidl_generate_interfaces_TARGET}${_target_suffix} PRIVATE
   ${rosidl_generate_interfaces_TARGET}__rosidl_generator_c
-  ${_cyclonedds_idl_target}
+  $<BUILD_INTERFACE:${_cyclonedds_idl_target}>
   CycloneDDS::ddsc
   rosidl_runtime_c::rosidl_runtime_c
   rosidl_typesupport_cyclonedds_c::rosidl_typesupport_cyclonedds_c)
@@ -126,6 +142,8 @@ if(NOT rosidl_generate_interfaces_SKIP_INSTALL)
     ARCHIVE DESTINATION lib
     LIBRARY DESTINATION lib
     RUNTIME DESTINATION bin)
+  install(TARGETS ${_cyclonedds_idl_target}
+    ARCHIVE DESTINATION lib)
   ament_export_dependencies(
     CycloneDDS rosidl_runtime_c rosidl_typesupport_cyclonedds_c)
 endif()

@@ -14,7 +14,11 @@ find_package(rosidl_runtime_c REQUIRED)
 
 ament_python_install_package(${PROJECT_NAME})
 
-add_library(${PROJECT_NAME} SHARED src/identifier.c)
+set(_typesupport_library_type SHARED)
+if(ROS2_ZEPHYR_STATIC_BUILD)
+  set(_typesupport_library_type STATIC)
+endif()
+add_library(${PROJECT_NAME} ${_typesupport_library_type} src/identifier.c)
 target_compile_options(${PROJECT_NAME} PRIVATE -Wall -Wextra -Wconversion -Werror)
 target_include_directories(${PROJECT_NAME} PUBLIC
   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"

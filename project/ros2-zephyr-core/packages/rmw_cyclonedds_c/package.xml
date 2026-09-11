@@ -8,14 +8,17 @@
 
   <buildtool_depend>ament_cmake</buildtool_depend>
   <depend>cyclonedds</depend>
-  <depend>rcl</depend>
-  <depend>rclc</depend>
   <depend>rmw</depend>
   <depend>rosidl_runtime_c</depend>
   <depend>rosidl_typesupport_c</depend>
   <depend>rosidl_typesupport_cyclonedds_c</depend>
   <depend>phase4_test_msgs</depend>
   <depend>std_msgs</depend>
+
+  <test_depend condition="$ROS2_ZEPHYR_CROSS != 1">rcl</test_depend>
+  <test_depend condition="$ROS2_ZEPHYR_CROSS != 1">rclc</test_depend>
+
+  <member_of_group>rmw_implementation_packages</member_of_group>
 
   <export>
     <build_type>ament_cmake</build_type>

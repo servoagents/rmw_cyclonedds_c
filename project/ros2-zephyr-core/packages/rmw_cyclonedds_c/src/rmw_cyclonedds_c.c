@@ -410,7 +410,11 @@ static bool get_domain_id(const rmw_init_options_t * options, size_t * domain_id
   }
   const char * environment = getenv("ROS_DOMAIN_ID");
   if (environment == NULL || environment[0] == '\0') {
+#ifdef RMW_CYCLONEDDS_C_DEFAULT_DOMAIN_ID
+    *domain_id = (size_t)RMW_CYCLONEDDS_C_DEFAULT_DOMAIN_ID;
+#else
     *domain_id = 0U;
+#endif
     return true;
   }
   errno = 0;
@@ -445,8 +449,14 @@ rmw_ret_t rmw_init(const rmw_init_options_t * options, rmw_context_t * context)
     return RMW_RET_BAD_ALLOC;
   }
   implementation->allocator = allocator;
+  const char * cyclone_uri = getenv("CYCLONEDDS_URI");
+#ifdef RMW_CYCLONEDDS_C_URI
+  if (cyclone_uri == NULL || cyclone_uri[0] == '\0') {
+    cyclone_uri = RMW_CYCLONEDDS_C_URI;
+  }
+#endif
   implementation->domain = dds_create_domain(
-    (dds_domainid_t)domain_id, getenv("CYCLONEDDS_URI"));
+    (dds_domainid_t)domain_id, cyclone_uri);
   if (implementation->domain < 0) {
     (void)map_dds_result(implementation->domain, "dds_create_domain");
     allocator.deallocate(implementation, allocator.state);

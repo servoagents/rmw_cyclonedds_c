@@ -23,20 +23,22 @@ rosidl_get_typesupport_target(_cyclonedds_c_target
 rosidl_get_typesupport_target(_generic_c_target
   ${PROJECT_NAME} rosidl_typesupport_c)
 
-add_executable(phase4_generated_conversion_test
-  test/generated_conversion_test.c)
-target_compile_options(phase4_generated_conversion_test PRIVATE
-  -Wall -Wextra -Wconversion -Werror)
-target_link_libraries(phase4_generated_conversion_test PRIVATE
-  ${PROJECT_NAME}__rosidl_generator_c
-  ${_generic_c_target}
-  ${_cyclonedds_c_target}
-  rcutils::rcutils
-  rosidl_typesupport_c::rosidl_typesupport_c
-  rosidl_typesupport_cyclonedds_c::rosidl_typesupport_cyclonedds_c)
+if(BUILD_TESTING)
+  add_executable(phase4_generated_conversion_test
+    test/generated_conversion_test.c)
+  target_compile_options(phase4_generated_conversion_test PRIVATE
+    -Wall -Wextra -Wconversion -Werror)
+  target_link_libraries(phase4_generated_conversion_test PRIVATE
+    ${PROJECT_NAME}__rosidl_generator_c
+    ${_generic_c_target}
+    ${_cyclonedds_c_target}
+    rcutils::rcutils
+    rosidl_typesupport_c::rosidl_typesupport_c
+    rosidl_typesupport_cyclonedds_c::rosidl_typesupport_cyclonedds_c)
 
-install(TARGETS phase4_generated_conversion_test
-  DESTINATION lib/${PROJECT_NAME})
+  install(TARGETS phase4_generated_conversion_test
+    DESTINATION lib/${PROJECT_NAME})
+endif()
 
 ament_export_dependencies(rosidl_default_runtime)
 ament_package()
