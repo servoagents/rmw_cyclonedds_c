@@ -4,6 +4,17 @@ This package began as the Phase 3 Linux-first vertical slice and now also
 accepts Phase 4 generated fixed-size type support. It is intentionally not a
 complete RMW implementation.
 
+## Repository ownership
+
+This package is incubated in `ros2-zephyr-lab`, but it is not Zephyr-specific:
+its Linux tests and interoperability lane are part of its contract. The
+recommended extraction is a standalone middleware repository containing this
+package, `rosidl_typesupport_cyclonedds_c`, and their test-only interface
+fixtures. Keeping the RMW and generator in one repository initially gives them
+one tested compatibility and release boundary. See
+[`docs/architecture-and-repositories.md`](../../docs/architecture-and-repositories.md)
+for the complete decision and split criteria.
+
 The initial supported profile is:
 
 - ordinary `rclc`/`rcl` initialization and cleanup;

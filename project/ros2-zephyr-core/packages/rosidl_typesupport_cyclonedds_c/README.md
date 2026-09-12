@@ -22,5 +22,18 @@ scripts/phase4.sh all
 
 The package is registered in the `rosidl_typesupport_c` resource index, so an
 interface package that finds it before `rosidl_generate_interfaces()` receives
-the custom target automatically. This implementation is currently validated
-only in the pinned Linux container; the Zephyr cross-build remains next.
+the custom target automatically. It is validated in the pinned Linux container
+and is cross-compiled as part of the Phase 5 Zephyr `native_sim` and ESP32
+builds. The native Zephyr loopback has executed; the ESP32 result is currently
+compile/link-only.
+
+## Repository ownership
+
+This generator is middleware-specific but not Zephyr-specific. It should not
+become an internal directory of `ros2_zephyr`. During incubation and the first
+public releases it should live beside `rmw_cyclonedds_c` in one standalone
+middleware repository, because the two packages share a fixed-type profile,
+tests, and version contract. A separate repository becomes useful only after
+the generator has independent consumers or an independent upstream/release
+owner. See
+[`docs/architecture-and-repositories.md`](../../docs/architecture-and-repositories.md).
