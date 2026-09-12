@@ -1,0 +1,12 @@
+build/
+install/
+log/
+results/
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+.idea/
+.vscode/
+compile_commands.json

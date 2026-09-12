@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>rosidl_typesupport_cyclonedds_c</name>
+  <version>0.1.0</version>
+  <description>Generated fixed-size ROS C to Cyclone DDS C type support.</description>
+  <maintainer email="fj-blanco@users.noreply.github.com">Javier Blanco</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>ament_cmake_python</buildtool_depend>
+  <buildtool_depend>ament_cmake_ros_core</buildtool_depend>
+  <buildtool_export_depend>ament_cmake_ros_core</buildtool_export_depend>
+  <buildtool_export_depend>python3</buildtool_export_depend>
+  <buildtool_export_depend>rosidl_generator_c</buildtool_export_depend>
+  <buildtool_export_depend>rosidl_generator_dds_idl</buildtool_export_depend>
+
+  <depend>cyclonedds</depend>
+  <depend>rosidl_runtime_c</depend>
+  <depend>rosidl_typesupport_interface</depend>
+  <exec_depend>rosidl_pycommon</exec_depend>
+
+  <member_of_group>rosidl_typesupport_c_packages</member_of_group>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
