@@ -5,9 +5,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPOSITORY_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 OUTPUT_DIR="${1:-${REPOSITORY_ROOT}/results/uint32-interop}"
-IMAGE="${RMW_CYCLONEDDS_C_IMAGE:-servoagents/rmw-cyclonedds-c:kilted}"
+ROS_DISTRO="${RMW_CYCLONEDDS_C_ROS_DISTRO:-lyrical}"
+IMAGE="${RMW_CYCLONEDDS_C_IMAGE:-servoagents/rmw-cyclonedds-c:${ROS_DISTRO}}"
 ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-94}"
-CYCLONEDDS_URI='<CycloneDDS><Domain><General><AllowMulticast>true</AllowMulticast></General></Domain></CycloneDDS>'
+CYCLONEDDS_URI="${RMW_CYCLONEDDS_C_URI:-<CycloneDDS><Domain><General><AllowMulticast>true</AllowMulticast></General></Domain></CycloneDDS>}"
 RMW_BINARY=/workspace/install/rmw_cyclonedds_c/lib/rmw_cyclonedds_c/uint32_interop
 
 mkdir -p "${OUTPUT_DIR}"
@@ -30,7 +31,7 @@ timeout --signal=KILL 40 docker run --rm --network bridge \
   -e RMW_IMPLEMENTATION=rmw_cyclonedds_c \
   -e CYCLONEDDS_URI="${CYCLONEDDS_URI}" \
   "${IMAGE}" \
-  bash -lc ". /opt/ros/kilted/setup.sh && . /workspace/install/setup.sh && exec ${RMW_BINARY} sub" \
+  bash -lc ". /opt/ros/${ROS_DISTRO}/setup.sh && . /workspace/install/setup.sh && exec ${RMW_BINARY} sub" \
   >"${OUTPUT_DIR}/ros-to-rmw.rmw.log" 2>&1 &
 custom_pid=$!
 sleep 2
@@ -64,7 +65,7 @@ timeout --signal=KILL 35 docker run --rm --network bridge \
   -e RMW_IMPLEMENTATION=rmw_cyclonedds_c \
   -e CYCLONEDDS_URI="${CYCLONEDDS_URI}" \
   "${IMAGE}" \
-  bash -lc ". /opt/ros/kilted/setup.sh && . /workspace/install/setup.sh && exec ${RMW_BINARY} pub" \
+  bash -lc ". /opt/ros/${ROS_DISTRO}/setup.sh && . /workspace/install/setup.sh && exec ${RMW_BINARY} pub" \
   >"${OUTPUT_DIR}/rmw-to-ros.rmw.log" 2>&1
 wait "${ros_pid}"
 ros_pid=""
@@ -78,8 +79,8 @@ grep -q '^RMW_SENT direction=rmw_to_ros value=271828182 sequence=1$' \
 grep -q '^data: 271828182$' "${OUTPUT_DIR}/rmw-to-ros.ros.log"
 
 {
-  echo 'PASS ROS 2 Kilted rmw_cyclonedds_cpp -> rmw_cyclonedds_c value=314159265'
-  echo 'PASS rmw_cyclonedds_c -> ROS 2 Kilted rmw_cyclonedds_cpp value=271828182'
+  echo "PASS ROS 2 ${ROS_DISTRO} rmw_cyclonedds_cpp -> rmw_cyclonedds_c value=314159265"
+  echo "PASS rmw_cyclonedds_c -> ROS 2 ${ROS_DISTRO} rmw_cyclonedds_cpp value=271828182"
   echo "domain=${ROS_DOMAIN_ID}"
   echo 'type=std_msgs::msg::dds_::UInt32_'
 } | tee "${OUTPUT_DIR}/summary.log"

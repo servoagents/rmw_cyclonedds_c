@@ -12,7 +12,17 @@ jobs:
   test:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - ros-distro: kilted
+            test-script: scripts/test.sh
+          - ros-distro: lyrical
+            test-script: scripts/test_core.sh
+    env:
+      RMW_CYCLONEDDS_C_ROS_DISTRO: ${{ matrix.ros-distro }}
     steps:
       - uses: actions/checkout@v4
       - name: Check and test
-        run: scripts/test.sh
+        run: ${{ matrix.test-script }}

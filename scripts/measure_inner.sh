@@ -3,8 +3,8 @@
 set -eo pipefail
 
 # These files exist in the test image.
-# shellcheck disable=SC1091
-. /opt/ros/kilted/setup.sh
+# shellcheck disable=SC1090
+. "/opt/ros/${ROS_DISTRO}/setup.sh"
 # shellcheck disable=SC1091
 . /workspace/install/setup.sh
 set -u

@@ -1,15 +1,19 @@
-FROM ros:kilted-ros-base-noble@sha256:0030f32dc8a71ef8401c89470db6003c779f036f532d40195790f58f0001902d
+ARG ROS_BASE_IMAGE=ros:lyrical-ros-base-resolute@sha256:dbb2a254523ee3c40ec9fc07956bc1042253c7beb3b6dad4a4585d85c99e9716
+FROM ${ROS_BASE_IMAGE}
+
+ARG ROS_DISTRO=lyrical
+ENV ROS_DISTRO=${ROS_DISTRO}
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
       ltrace \
-      ros-kilted-cyclonedds \
-      ros-kilted-rclc \
-      ros-kilted-rmw-cyclonedds-cpp \
-      ros-kilted-rosidl-generator-dds-idl \
-      ros-kilted-ros2topic \
+      ros-${ROS_DISTRO}-cyclonedds \
+      ros-${ROS_DISTRO}-rclc \
+      ros-${ROS_DISTRO}-rmw-cyclonedds-cpp \
+      ros-${ROS_DISTRO}-rosidl-generator-dds-idl \
+      ros-${ROS_DISTRO}-ros2topic \
       shellcheck \
     && rm -rf /var/lib/apt/lists/*
 
@@ -21,14 +25,15 @@ COPY scripts src/scripts
 
 RUN shellcheck src/scripts/*.sh
 
-RUN source /opt/ros/kilted/setup.sh \
+RUN source "/opt/ros/${ROS_DISTRO}/setup.sh" \
     && colcon --log-base log build \
+      --executor sequential \
       --build-base build \
       --install-base install \
       --packages-up-to rmw_cyclonedds_c \
       --cmake-args -DCMAKE_BUILD_TYPE=RelWithDebInfo
 
-RUN source /opt/ros/kilted/setup.sh \
+RUN source "/opt/ros/${ROS_DISTRO}/setup.sh" \
     && source install/setup.sh \
     && install/rosidl_typesupport_cyclonedds_c/lib/rosidl_typesupport_cyclonedds_c/check_fixed_profile.py \
     && install/cyclonedds_c_test_msgs/lib/cyclonedds_c_test_msgs/generated_conversion_test \

@@ -20,16 +20,16 @@ desktop RMW.
 | Scalar and fixed-array messages | Supported |
 | Nested fixed-size messages | Supported |
 | DDS-backed waits and guard conditions | Supported |
-| Interoperability with `rmw_cyclonedds_cpp` | Tested |
+| Interoperability with `rmw_cyclonedds_cpp` | Tested on ROS 2 Kilted |
 | Reliable or transient-local QoS | Not supported |
 | Strings and variable-size sequences | Not supported |
 | Services, clients, and actions | Not supported |
 | Remote graph queries and DDS Security | Not supported |
 
 Unsupported policies and message shapes are rejected explicitly. The library
-exports the complete RMW loader ABI required by ROS 2 Kilted, but functions
-outside the supported profile return `RMW_RET_UNSUPPORTED` or the equivalent
-failure value for their signature.
+exports the complete RMW loader ABI required by ROS 2 Kilted and Lyrical, but
+functions outside the supported profile return `RMW_RET_UNSUPPORTED` or the
+equivalent failure value for their signature.
 
 ## Repository layout
 
@@ -42,7 +42,7 @@ scripts/                           containerized test and interop lanes
 
 ## Build and test
 
-The reproducible test lane uses Docker and ROS 2 Kilted:
+The complete reproducible lane uses Docker and ROS 2 Kilted:
 
 ```sh
 scripts/test.sh
@@ -51,6 +51,18 @@ scripts/test.sh
 It builds all three packages, checks generator and RMW contracts, verifies the
 loader ABI, and tests both wire directions against unmodified
 `rmw_cyclonedds_cpp`. Results are written below `results/`.
+
+The Lyrical migration currently covers compilation, the loader ABI, the RMW
+smoke test, and negative/timeout/guard-condition contracts:
+
+```sh
+scripts/test_core.sh
+```
+
+Wire interoperability with the stock Lyrical `rmw_cyclonedds_cpp` is not yet
+claimed. Lyrical's installed DDS IDL and its dynamic type construction use
+different member names, which produces different XTypes identifiers for the
+same ROS message. See [the Lyrical compatibility note](docs/lyrical.md).
 
 For a local ROS workspace:
 

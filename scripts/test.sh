@@ -3,11 +3,8 @@
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export RMW_CYCLONEDDS_C_ROS_DISTRO="${RMW_CYCLONEDDS_C_ROS_DISTRO:-kilted}"
 
-"${script_dir}/check.sh"
-"${script_dir}/build_image.sh"
-"${script_dir}/run_smoke.sh"
-"${script_dir}/run_contract_tests.sh"
-"${script_dir}/check_abi.sh"
+"${script_dir}/test_core.sh"
 "${script_dir}/run_uint32_interop.sh"
 "${script_dir}/run_generated_interop.sh"

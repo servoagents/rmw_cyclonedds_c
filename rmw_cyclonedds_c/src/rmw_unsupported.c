@@ -18,6 +18,13 @@
 #include <rmw/rmw.h>
 #include <rmw/topic_endpoint_info_array.h>
 
+#if defined(__has_include)
+#  if __has_include(<rmw/get_service_endpoint_info.h>)
+#    include <rmw/get_service_endpoint_info.h>
+#    define RMW_CYCLONEDDS_C_HAS_SERVICE_ENDPOINT_INFO 1
+#  endif
+#endif
+
 static rmw_ret_t unsupported(const char *operation)
 {
   RMW_SET_ERROR_MSG_WITH_FORMAT_STRING("%s is outside the rmw_cyclonedds_c supported profile",
@@ -161,6 +168,22 @@ rmw_ret_t rmw_get_publishers_info_by_topic(const rmw_node_t *node, rcutils_alloc
 {
   return UNSUPPORTED();
 }
+
+#if defined(RMW_CYCLONEDDS_C_HAS_SERVICE_ENDPOINT_INFO)
+rmw_ret_t rmw_get_clients_info_by_service(const rmw_node_t *node, rcutils_allocator_t *allocator,
+                                          const char *service_name, bool no_mangle,
+                                          rmw_service_endpoint_info_array_t *clients_info)
+{
+  return UNSUPPORTED();
+}
+
+rmw_ret_t rmw_get_servers_info_by_service(const rmw_node_t *node, rcutils_allocator_t *allocator,
+                                          const char *service_name, bool no_mangle,
+                                          rmw_service_endpoint_info_array_t *servers_info)
+{
+  return UNSUPPORTED();
+}
+#endif
 
 rmw_ret_t rmw_get_serialized_message_size(const rosidl_message_type_support_t *type_support,
                                           const rosidl_runtime_c__Sequence__bound *message_bounds,

@@ -5,7 +5,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPOSITORY_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 OUTPUT_DIR="${1:-${REPOSITORY_ROOT}/results/smoke}"
-IMAGE="${RMW_CYCLONEDDS_C_IMAGE:-servoagents/rmw-cyclonedds-c:kilted}"
+ROS_DISTRO="${RMW_CYCLONEDDS_C_ROS_DISTRO:-lyrical}"
+IMAGE="${RMW_CYCLONEDDS_C_IMAGE:-servoagents/rmw-cyclonedds-c:${ROS_DISTRO}}"
 
 mkdir -p "${OUTPUT_DIR}"
 
@@ -13,7 +14,7 @@ docker run --rm --network none \
   -e RMW_IMPLEMENTATION=rmw_cyclonedds_c \
   -e ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-93}" \
   "${IMAGE}" \
-  bash -lc '. /opt/ros/kilted/setup.sh && . /workspace/install/setup.sh && exec /workspace/install/rmw_cyclonedds_c/lib/rmw_cyclonedds_c/rmw_smoke_test' \
+  bash -lc ". /opt/ros/${ROS_DISTRO}/setup.sh && . /workspace/install/setup.sh && exec /workspace/install/rmw_cyclonedds_c/lib/rmw_cyclonedds_c/rmw_smoke_test" \
   >"${OUTPUT_DIR}/stdout.log" \
   2>"${OUTPUT_DIR}/stderr.log"
 

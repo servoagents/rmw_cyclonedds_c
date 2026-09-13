@@ -5,9 +5,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPOSITORY_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 OUTPUT_DIR="${1:-${REPOSITORY_ROOT}/results/generated-interop}"
-IMAGE="${RMW_CYCLONEDDS_C_IMAGE:-servoagents/rmw-cyclonedds-c:kilted}"
+ROS_DISTRO="${RMW_CYCLONEDDS_C_ROS_DISTRO:-lyrical}"
+IMAGE="${RMW_CYCLONEDDS_C_IMAGE:-servoagents/rmw-cyclonedds-c:${ROS_DISTRO}}"
 ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-95}"
-CYCLONEDDS_URI='<CycloneDDS><Domain><General><AllowMulticast>true</AllowMulticast></General></Domain></CycloneDDS>'
+CYCLONEDDS_URI="${RMW_CYCLONEDDS_C_URI:-<CycloneDDS><Domain><General><AllowMulticast>true</AllowMulticast></General></Domain></CycloneDDS>}"
 RMW_BINARY=/workspace/install/rmw_cyclonedds_c/lib/rmw_cyclonedds_c/generated_interop
 
 mkdir -p "${OUTPUT_DIR}"
@@ -26,7 +27,7 @@ timeout --signal=KILL 40 docker run --rm --network bridge \
   -e RMW_IMPLEMENTATION=rmw_cyclonedds_c \
   -e CYCLONEDDS_URI="${CYCLONEDDS_URI}" \
   "${IMAGE}" \
-  bash -lc ". /opt/ros/kilted/setup.sh && . /workspace/install/setup.sh && exec ${RMW_BINARY} sub" \
+  bash -lc ". /opt/ros/${ROS_DISTRO}/setup.sh && . /workspace/install/setup.sh && exec ${RMW_BINARY} sub" \
   >"${OUTPUT_DIR}/ros-to-rmw.rmw.log" 2>&1 &
 custom_pid=$!
 sleep 2
@@ -35,7 +36,7 @@ timeout --signal=KILL 20 docker run --rm --network bridge \
   -e RMW_IMPLEMENTATION=rmw_cyclonedds_cpp \
   -e CYCLONEDDS_URI="${CYCLONEDDS_URI}" \
   "${IMAGE}" \
-  bash -lc ". /opt/ros/kilted/setup.sh && . /workspace/install/setup.sh && ros2 topic pub \
+  bash -lc ". /opt/ros/${ROS_DISTRO}/setup.sh && . /workspace/install/setup.sh && ros2 topic pub \
     --times 10 --rate 5 --wait-matching-subscriptions 0 \
     --qos-reliability best_effort --qos-durability volatile \
     --qos-history keep_last --qos-depth 10 \
@@ -50,7 +51,7 @@ timeout --signal=KILL 30 docker run --rm --network bridge \
   -e RMW_IMPLEMENTATION=rmw_cyclonedds_cpp \
   -e CYCLONEDDS_URI="${CYCLONEDDS_URI}" \
   "${IMAGE}" \
-  bash -lc ". /opt/ros/kilted/setup.sh && . /workspace/install/setup.sh && ros2 topic echo --once \
+  bash -lc ". /opt/ros/${ROS_DISTRO}/setup.sh && . /workspace/install/setup.sh && ros2 topic echo --once \
     --qos-reliability best_effort --qos-durability volatile \
     --qos-history keep_last --qos-depth 10 \
     /generated_rmw_to_ros cyclonedds_c_test_msgs/msg/NestedFixed" \
@@ -62,7 +63,7 @@ timeout --signal=KILL 35 docker run --rm --network bridge \
   -e RMW_IMPLEMENTATION=rmw_cyclonedds_c \
   -e CYCLONEDDS_URI="${CYCLONEDDS_URI}" \
   "${IMAGE}" \
-  bash -lc ". /opt/ros/kilted/setup.sh && . /workspace/install/setup.sh && exec ${RMW_BINARY} pub" \
+  bash -lc ". /opt/ros/${ROS_DISTRO}/setup.sh && . /workspace/install/setup.sh && exec ${RMW_BINARY} pub" \
   >"${OUTPUT_DIR}/rmw-to-ros.rmw.log" 2>&1
 wait "${ros_pid}"
 ros_pid=""
