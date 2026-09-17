@@ -18,7 +18,7 @@ docker run --rm --network none \
   >"${OUTPUT_DIR}/stdout.log" \
   2>"${OUTPUT_DIR}/stderr.log"
 
-grep -q '^RMW_CYCLONEDDS_C_CONTRACT_PASS reliable=rejected type=rejected timeout=passed guard=passed$' \
+grep -q '^RMW_CYCLONEDDS_C_CONTRACT_PASS transient_local=rejected type=rejected timeout=passed guard=passed$' \
   "${OUTPUT_DIR}/stdout.log"
 if grep -q 'failed to resolve symbol' "${OUTPUT_DIR}/stderr.log"; then
   echo "RMW loader symbol resolution failed; inspect ${OUTPUT_DIR}/stderr.log" >&2

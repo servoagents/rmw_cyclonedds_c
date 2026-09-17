@@ -57,10 +57,10 @@ int main(void)
     goto cleanup_support;
   }
 
-  rmw_qos_profile_t reliable_qos = rmw_qos_profile_sensor_data;
-  reliable_qos.reliability = RMW_QOS_POLICY_RELIABILITY_RELIABLE;
+  rmw_qos_profile_t transient_local_qos = rmw_qos_profile_sensor_data;
+  transient_local_qos.durability = RMW_QOS_POLICY_DURABILITY_TRANSIENT_LOCAL;
   if (expect_creation_failure(&node, ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, UInt32),
-                              "reliable_rejected", reliable_qos) != 0) {
+                              "transient_local_rejected", transient_local_qos) != 0) {
     goto cleanup_node;
   }
   if (expect_creation_failure(&node, ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32),
@@ -105,7 +105,7 @@ int main(void)
     goto cleanup_wait_set;
   }
 
-  printf("RMW_CYCLONEDDS_C_CONTRACT_PASS reliable=rejected type=rejected timeout=passed "
+  printf("RMW_CYCLONEDDS_C_CONTRACT_PASS transient_local=rejected type=rejected timeout=passed "
          "guard=passed\n");
   result = 0;
 

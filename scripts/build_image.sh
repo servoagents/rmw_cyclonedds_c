@@ -9,9 +9,11 @@ image="${RMW_CYCLONEDDS_C_IMAGE:-servoagents/rmw-cyclonedds-c:${ros_distro}}"
 case "${ros_distro}" in
   lyrical)
     default_base_image="ros:lyrical-ros-base-resolute@sha256:dbb2a254523ee3c40ec9fc07956bc1042253c7beb3b6dad4a4585d85c99e9716"
+    test_rmw_implementation_revision="e241da2fbf75f9f8676751108d18d91115cdbe04"
     ;;
   kilted)
     default_base_image="ros:kilted-ros-base-noble@sha256:0030f32dc8a71ef8401c89470db6003c779f036f532d40195790f58f0001902d"
+    test_rmw_implementation_revision="1a9b0e672a787af8c3a740d21dece9389d6b77ea"
     ;;
   *)
     echo "unsupported ROS distribution: ${ros_distro}" >&2
@@ -23,5 +25,6 @@ base_image="${RMW_CYCLONEDDS_C_BASE_IMAGE:-${default_base_image}}"
 docker build --provenance=false \
   --build-arg "ROS_BASE_IMAGE=${base_image}" \
   --build-arg "ROS_DISTRO=${ros_distro}" \
+  --build-arg "TEST_RMW_IMPLEMENTATION_REV=${test_rmw_implementation_revision}" \
   --tag "${image}" \
   "${repository_root}"

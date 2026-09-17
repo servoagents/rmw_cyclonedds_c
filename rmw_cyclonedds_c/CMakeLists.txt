@@ -61,6 +61,7 @@ if(rosidl_typesupport_cyclonedds_c_FOUND)
 endif()
 
 if(BUILD_TESTING)
+  find_package(ament_cmake_test REQUIRED)
   find_package(cyclonedds_c_test_msgs QUIET)
   find_package(rcl REQUIRED)
   find_package(rclc REQUIRED)
@@ -71,7 +72,8 @@ if(BUILD_TESTING)
   if(cyclonedds_c_test_msgs_FOUND AND rosidl_typesupport_cyclonedds_c_FOUND)
     add_executable(generated_rmw_test test/generated_rmw.c)
     add_executable(generated_interop test/generated_interop_rclc.c)
-    list(APPEND _rmw_test_targets generated_rmw_test generated_interop)
+    add_executable(reliable_loss test/reliable_loss.c)
+    list(APPEND _rmw_test_targets generated_rmw_test generated_interop reliable_loss)
   endif()
   foreach(test_target ${_rmw_test_targets})
     target_compile_options(${test_target} PRIVATE -Wall -Wextra -Wconversion -Werror)
@@ -80,6 +82,23 @@ if(BUILD_TESTING)
       target_link_libraries(${test_target} PRIVATE ${cyclonedds_c_test_msgs_TARGETS})
     endif()
   endforeach()
+
+  function(add_rmw_cyclonedds_c_test test_name target_name domain_id)
+    ament_add_test(
+      ${test_name}
+      COMMAND $<TARGET_FILE:${target_name}> ${ARGN}
+      ENV RMW_IMPLEMENTATION=rmw_cyclonedds_c ROS_DOMAIN_ID=${domain_id}
+      GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+      TIMEOUT 30
+    )
+  endfunction()
+
+  add_rmw_cyclonedds_c_test(rmw_smoke rmw_smoke_test 111)
+  add_rmw_cyclonedds_c_test(rmw_contract contract_test 112)
+  if(cyclonedds_c_test_msgs_FOUND AND rosidl_typesupport_cyclonedds_c_FOUND)
+    add_rmw_cyclonedds_c_test(rmw_generated_best_effort generated_rmw_test 113 best_effort)
+    add_rmw_cyclonedds_c_test(rmw_generated_reliable generated_rmw_test 114 reliable)
+  endif()
 
   install(TARGETS ${_rmw_test_targets} DESTINATION lib/${PROJECT_NAME})
 endif()

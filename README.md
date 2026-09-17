@@ -16,12 +16,12 @@ desktop RMW.
 | Capability | Status |
 | --- | --- |
 | Publishers and subscriptions | Supported |
-| Best-effort, volatile, keep-last QoS | Supported |
+| Best-effort or reliable, volatile, keep-last QoS | Supported |
 | Scalar and fixed-array messages | Supported |
 | Nested fixed-size messages | Supported |
 | DDS-backed waits and guard conditions | Supported |
 | Interoperability with `rmw_cyclonedds_cpp` | Tested on ROS 2 Kilted |
-| Reliable or transient-local QoS | Not supported |
+| Transient-local QoS | Not supported |
 | Strings and variable-size sequences | Not supported |
 | Services, clients, and actions | Not supported |
 | Remote graph queries and DDS Security | Not supported |
@@ -49,8 +49,13 @@ scripts/test.sh
 ```
 
 It builds all three packages, checks generator and RMW contracts, verifies the
-loader ABI, and tests both wire directions against unmodified
-`rmw_cyclonedds_cpp`. Results are written below `results/`.
+loader ABI, and tests best-effort and reliable communication in both wire
+directions against stock `rmw_cyclonedds_cpp`. The stock implementation is an
+interoperability reference, not the behavioral specification: the RMW API,
+ROS 2 semantics, and DDS semantics define the contract. The Reliable lane also
+drops the first sample on the publisher's network interface and verifies that
+the same sample is delivered after Cyclone retransmits it. Results are written
+below `results/`.
 
 The Lyrical migration currently covers compilation, the loader ABI, the RMW
 smoke test, and negative/timeout/guard-condition contracts:
@@ -59,19 +64,34 @@ smoke test, and negative/timeout/guard-condition contracts:
 scripts/test_core.sh
 ```
 
-Wire interoperability with the stock Lyrical `rmw_cyclonedds_cpp` is not yet
-claimed. Lyrical's installed DDS IDL and its dynamic type construction use
-different member names, which produces different XTypes identifiers for the
-same ROS message. See [the Lyrical compatibility note](docs/lyrical.md).
+Wire interoperability with a normal, TypeInformation-enabled stock Lyrical
+`rmw_cyclonedds_cpp` is not claimed. Lyrical's installed DDS IDL and its
+dynamic type construction use different member names, which produces different
+XTypes identifiers for the same ROS message. The accepted ESP32-S3 Wi-Fi lane
+uses the embedded Cyclone build without type discovery; that distinct boundary
+is documented in [the Lyrical compatibility note](docs/lyrical.md).
 
 For a local ROS workspace:
 
 ```sh
 source /opt/ros/kilted/setup.sh
 colcon build --packages-up-to rmw_cyclonedds_c
+colcon test --packages-select rmw_cyclonedds_c
+colcon test-result --verbose
 ```
 
 Set `RMW_IMPLEMENTATION=rmw_cyclonedds_c` before running an application.
+The package test runner covers the self-contained smoke, contract, and
+best-effort/reliable C-to-C tests. Stock-RMW interoperability, network fault
+injection, cross-distribution checks, and hardware runs remain explicit
+orchestration scripts.
+
+The implementation-neutral ROS `test_rmw_implementation` suite is tracked as
+a separate conformance lane. Tests for the supported profile must pass;
+tests requiring deliberately unsupported APIs are recorded as such rather
+than treated as successful coverage. That boundary should shrink as the RMW
+API grows. See [the conformance boundary](docs/conformance.md) for the pinned
+suite, command, and current classification.
 
 ## Relationship to ros2_zephyr
 

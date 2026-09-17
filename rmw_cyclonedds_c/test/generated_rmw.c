@@ -9,6 +9,7 @@
 #include <rcl/rcl.h>
 #include <rclc/executor.h>
 #include <rclc/rclc.h>
+#include <rmw/qos_profiles.h>
 
 enum { TEST_VALUE = 8675309U, TEST_MAX_SPINS = 100 };
 
@@ -42,8 +43,17 @@ static void record_cleanup(const rcl_ret_t cleanup_result, const char *operation
   }
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
+  if (argc != 2 || (strcmp(argv[1], "best_effort") != 0 && strcmp(argv[1], "reliable") != 0)) {
+    fprintf(stderr, "usage: %s best_effort|reliable\n", argv[0]);
+    return 2;
+  }
+  const rmw_qos_reliability_policy_t reliability = strcmp(argv[1], "reliable") == 0
+                                                        ? RMW_QOS_POLICY_RELIABILITY_RELIABLE
+                                                        : RMW_QOS_POLICY_RELIABILITY_BEST_EFFORT;
+  rmw_qos_profile_t qos = rmw_qos_profile_sensor_data;
+  qos.reliability = reliability;
   int result = 1;
   rcl_allocator_t allocator = rcl_get_default_allocator();
   rclc_support_t support;
@@ -68,19 +78,26 @@ int main(void)
           "node_init") != 0) {
     goto fini_support;
   }
-  if (check_rcl(rclc_publisher_init_best_effort(
+  if (check_rcl(rclc_publisher_init(
                     &publisher, &node,
                     ROSIDL_GET_MSG_TYPE_SUPPORT(cyclonedds_c_test_msgs, msg, NestedFixed),
-                    "generated_rmw_loopback"),
+                    "generated_rmw_loopback", &qos),
                 "publisher_init") != 0) {
     goto fini_node;
   }
-  if (check_rcl(rclc_subscription_init_best_effort(
+  if (check_rcl(rclc_subscription_init(
                     &subscription, &node,
                     ROSIDL_GET_MSG_TYPE_SUPPORT(cyclonedds_c_test_msgs, msg, NestedFixed),
-                    "generated_rmw_loopback"),
+                    "generated_rmw_loopback", &qos),
                 "subscription_init") != 0) {
     goto fini_publisher;
+  }
+  const rmw_qos_profile_t *publisher_qos = rcl_publisher_get_actual_qos(&publisher);
+  const rmw_qos_profile_t *subscription_qos = rcl_subscription_get_actual_qos(&subscription);
+  if (publisher_qos == NULL || subscription_qos == NULL ||
+      publisher_qos->reliability != reliability || subscription_qos->reliability != reliability) {
+    fprintf(stderr, "RMW_CYCLONEDDS_C_QOS_ERROR requested=%s\n", argv[1]);
+    goto fini_subscription;
   }
   if (check_rcl(rclc_executor_init(&executor, &support.context, 1U, &allocator), "executor_init") !=
       0) {
@@ -100,9 +117,10 @@ int main(void)
   if (received && received_message.counter.data == outbound.counter.data &&
       memcmp(received_message.samples.values, outbound.samples.values,
              sizeof(outbound.samples.values)) == 0) {
-    printf("RMW_CYCLONEDDS_C_RMW_PASS value=%u array=%u,%u,%u,%u\n", received_message.counter.data,
-           received_message.samples.values[0], received_message.samples.values[1],
-           received_message.samples.values[2], received_message.samples.values[3]);
+    printf("RMW_CYCLONEDDS_C_RMW_PASS reliability=%s value=%u array=%u,%u,%u,%u\n", argv[1],
+           received_message.counter.data, received_message.samples.values[0],
+           received_message.samples.values[1], received_message.samples.values[2],
+           received_message.samples.values[3]);
     result = 0;
   } else {
     fprintf(stderr, "RMW_CYCLONEDDS_C_TIMEOUT received=%d value=%u\n", received,

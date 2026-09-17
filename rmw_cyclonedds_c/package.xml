@@ -14,6 +14,7 @@
   <depend>rosidl_typesupport_cyclonedds_c</depend>
   <depend>std_msgs</depend>
 
+  <test_depend condition="$ROS2_ZEPHYR_CROSS != 1">ament_cmake_test</test_depend>
   <test_depend condition="$ROS2_ZEPHYR_CROSS != 1">cyclonedds_c_test_msgs</test_depend>
   <test_depend condition="$ROS2_ZEPHYR_CROSS != 1">rcl</test_depend>
   <test_depend condition="$ROS2_ZEPHYR_CROSS != 1">rclc</test_depend>

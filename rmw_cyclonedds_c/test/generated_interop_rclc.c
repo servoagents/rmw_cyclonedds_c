@@ -12,6 +12,7 @@
 #include <rcl/rcl.h>
 #include <rclc/executor.h>
 #include <rclc/rclc.h>
+#include <rmw/qos_profiles.h>
 
 enum { RMW_TO_ROS_VALUE = 27182818U, ROS_TO_RMW_VALUE = 31415926U, MAX_WAITS = 300 };
 
@@ -41,15 +42,21 @@ static void cleanup_result(rcl_ret_t cleanup, const char *operation, int *result
   }
 }
 
-static int run_publisher(rcl_node_t *node)
+static int run_publisher(rcl_node_t *node, const rmw_qos_profile_t *qos,
+                         const char *reliability_name)
 {
   int result = 1;
   rcl_publisher_t publisher = rcl_get_zero_initialized_publisher();
-  if (rclc_publisher_init_best_effort(
+  if (rclc_publisher_init(
           &publisher, node, ROSIDL_GET_MSG_TYPE_SUPPORT(cyclonedds_c_test_msgs, msg, NestedFixed),
-          "generated_rmw_to_ros") != RCL_RET_OK) {
+          "generated_rmw_to_ros", qos) != RCL_RET_OK) {
     fprintf(stderr, "RMW_CYCLONEDDS_C_ERROR operation=publisher_init\n");
     return result;
+  }
+  const rmw_qos_profile_t *actual_qos = rcl_publisher_get_actual_qos(&publisher);
+  if (actual_qos == NULL || actual_qos->reliability != qos->reliability) {
+    fprintf(stderr, "RMW_CYCLONEDDS_C_ERROR operation=publisher_actual_qos\n");
+    goto cleanup;
   }
   size_t matched = 0U;
   for (unsigned int wait = 0U; wait < MAX_WAITS && matched == 0U; ++wait) {
@@ -73,7 +80,8 @@ static int run_publisher(rcl_node_t *node)
       fprintf(stderr, "RMW_CYCLONEDDS_C_ERROR operation=publish\n");
       goto cleanup;
     }
-    printf("RMW_SENT direction=rmw_to_ros value=%u sequence=%u\n", message.counter.data, sequence);
+    printf("RMW_SENT direction=rmw_to_ros reliability=%s value=%u sequence=%u\n",
+           reliability_name, message.counter.data, sequence);
     fflush(stdout);
     if (!pause_100_ms()) {
       goto cleanup;
@@ -86,23 +94,32 @@ cleanup:
   return result;
 }
 
-static int run_subscription(rcl_node_t *node, rclc_support_t *support, rcl_allocator_t *allocator)
+static int run_subscription(rcl_node_t *node, rclc_support_t *support, rcl_allocator_t *allocator,
+                            const rmw_qos_profile_t *qos, const char *reliability_name)
 {
   int result = 1;
   rcl_subscription_t subscription = rcl_get_zero_initialized_subscription();
   rclc_executor_t executor = rclc_executor_get_zero_initialized_executor();
   cyclonedds_c_test_msgs__msg__NestedFixed message = {0};
-  if (rclc_subscription_init_best_effort(
+  if (rclc_subscription_init(
           &subscription, node,
           ROSIDL_GET_MSG_TYPE_SUPPORT(cyclonedds_c_test_msgs, msg, NestedFixed),
-          "ros_to_generated_rmw") != RCL_RET_OK) {
+          "ros_to_generated_rmw", qos) != RCL_RET_OK) {
     fprintf(stderr, "RMW_CYCLONEDDS_C_ERROR operation=subscription_init\n");
     return result;
   }
-  if (rclc_executor_init(&executor, &support->context, 1U, allocator) != RCL_RET_OK ||
-      rclc_executor_add_subscription(&executor, &subscription, &message, receive_nested,
-                                     ON_NEW_DATA) != RCL_RET_OK) {
+  const rmw_qos_profile_t *actual_qos = rcl_subscription_get_actual_qos(&subscription);
+  if (actual_qos == NULL || actual_qos->reliability != qos->reliability) {
+    fprintf(stderr, "RMW_CYCLONEDDS_C_ERROR operation=subscription_actual_qos\n");
+    goto cleanup_subscription;
+  }
+  if (rclc_executor_init(&executor, &support->context, 1U, allocator) != RCL_RET_OK) {
     fprintf(stderr, "RMW_CYCLONEDDS_C_ERROR operation=executor_init\n");
+    goto cleanup_subscription;
+  }
+  if (rclc_executor_add_subscription(&executor, &subscription, &message, receive_nested,
+                                     ON_NEW_DATA) != RCL_RET_OK) {
+    fprintf(stderr, "RMW_CYCLONEDDS_C_ERROR operation=executor_add_subscription\n");
     goto cleanup_executor;
   }
   for (unsigned int wait = 0U; wait < MAX_WAITS && !received; ++wait) {
@@ -114,8 +131,8 @@ static int run_subscription(rcl_node_t *node, rclc_support_t *support, rcl_alloc
   }
   if (received && received_message.counter.data == ROS_TO_RMW_VALUE &&
       received_message.samples.values[0] == 21U && received_message.samples.values[3] == 24U) {
-    printf("RMW_RECEIVED direction=ros_to_rmw value=%u array=%u,%u,%u,%u\n",
-           received_message.counter.data, received_message.samples.values[0],
+    printf("RMW_RECEIVED direction=ros_to_rmw reliability=%s value=%u array=%u,%u,%u,%u\n",
+           reliability_name, received_message.counter.data, received_message.samples.values[0],
            received_message.samples.values[1], received_message.samples.values[2],
            received_message.samples.values[3]);
     result = 0;
@@ -126,16 +143,21 @@ static int run_subscription(rcl_node_t *node, rclc_support_t *support, rcl_alloc
 
 cleanup_executor:
   cleanup_result(rclc_executor_fini(&executor), "executor_fini", &result);
+cleanup_subscription:
   cleanup_result(rcl_subscription_fini(&subscription, node), "subscription_fini", &result);
   return result;
 }
 
 int main(int argc, char **argv)
 {
-  if (argc != 2 || (strcmp(argv[1], "pub") != 0 && strcmp(argv[1], "sub") != 0)) {
-    fprintf(stderr, "usage: %s pub|sub\n", argv[0]);
+  if (argc != 3 || (strcmp(argv[1], "pub") != 0 && strcmp(argv[1], "sub") != 0) ||
+      (strcmp(argv[2], "best_effort") != 0 && strcmp(argv[2], "reliable") != 0)) {
+    fprintf(stderr, "usage: %s pub|sub best_effort|reliable\n", argv[0]);
     return 2;
   }
+  rmw_qos_profile_t qos = rmw_qos_profile_sensor_data;
+  qos.reliability = strcmp(argv[2], "reliable") == 0 ? RMW_QOS_POLICY_RELIABILITY_RELIABLE
+                                                      : RMW_QOS_POLICY_RELIABILITY_BEST_EFFORT;
   int result = 1;
   rcl_allocator_t allocator = rcl_get_default_allocator();
   rclc_support_t support;
@@ -147,8 +169,9 @@ int main(int argc, char **argv)
   options.enable_rosout = false;
   if (rclc_node_init_with_options(&node, "generated_rmw_interop", "", &support, &options) ==
       RCL_RET_OK) {
-    result = strcmp(argv[1], "pub") == 0 ? run_publisher(&node)
-                                         : run_subscription(&node, &support, &allocator);
+    result = strcmp(argv[1], "pub") == 0
+                 ? run_publisher(&node, &qos, argv[2])
+                 : run_subscription(&node, &support, &allocator, &qos, argv[2]);
     cleanup_result(rcl_node_fini(&node), "node_fini", &result);
   }
   cleanup_result(rclc_support_fini(&support), "support_fini", &result);

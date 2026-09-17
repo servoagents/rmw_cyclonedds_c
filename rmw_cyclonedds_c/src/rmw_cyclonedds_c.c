@@ -19,6 +19,8 @@
 #include <rmw/init_options.h>
 #include <rmw/rmw.h>
 #include <rmw/security_options.h>
+#include <rmw/validate_namespace.h>
+#include <rmw/validate_node_name.h>
 #include <rosidl_runtime_c/message_type_support_struct.h>
 #include <rosidl_typesupport_c/message_type_support_dispatch.h>
 #ifdef RMW_CYCLONEDDS_C_HAS_GENERATED_TYPESUPPORT
@@ -198,11 +200,13 @@ static bool qos_is_supported(const rmw_qos_profile_t *qos)
   }
   if (qos->history != RMW_QOS_POLICY_HISTORY_KEEP_LAST || qos->depth == 0U ||
       qos->depth > (size_t)INT32_MAX ||
-      qos->reliability != RMW_QOS_POLICY_RELIABILITY_BEST_EFFORT ||
+      (qos->reliability != RMW_QOS_POLICY_RELIABILITY_BEST_EFFORT &&
+       qos->reliability != RMW_QOS_POLICY_RELIABILITY_RELIABLE) ||
       qos->durability != RMW_QOS_POLICY_DURABILITY_VOLATILE ||
       qos->avoid_ros_namespace_conventions) {
     RMW_SET_ERROR_MSG(
-        "The supported profile accepts ROS naming and best-effort/volatile/keep-last QoS only");
+        "The supported profile accepts ROS naming, best-effort or reliable, volatile, keep-last "
+        "QoS only");
     return false;
   }
   return true;
@@ -248,7 +252,11 @@ static dds_qos_t *create_dds_qos(const rmw_qos_profile_t *qos,
     return NULL;
   }
   dds_qset_history(dds_qos, DDS_HISTORY_KEEP_LAST, (int32_t)qos->depth);
-  dds_qset_reliability(dds_qos, DDS_RELIABILITY_BEST_EFFORT, DDS_MSECS(0));
+  if (qos->reliability == RMW_QOS_POLICY_RELIABILITY_RELIABLE) {
+    dds_qset_reliability(dds_qos, DDS_RELIABILITY_RELIABLE, DDS_INFINITY);
+  } else {
+    dds_qset_reliability(dds_qos, DDS_RELIABILITY_BEST_EFFORT, DDS_MSECS(0));
+  }
   dds_qset_durability(dds_qos, DDS_DURABILITY_VOLATILE);
   if (!set_type_hash_user_data(dds_qos, type_support)) {
     dds_delete_qos(dds_qos);
@@ -321,10 +329,13 @@ rmw_ret_t rmw_init_options_init(rmw_init_options_t *init_options, rcutils_alloca
 rmw_ret_t rmw_init_options_copy(const rmw_init_options_t *source, rmw_init_options_t *destination)
 {
   if (source == NULL || destination == NULL || source == destination ||
-      !identifiers_match(source->implementation_identifier) ||
-      destination->implementation_identifier != NULL) {
+      source->implementation_identifier == NULL || destination->implementation_identifier != NULL) {
     RMW_SET_ERROR_MSG("invalid init options copy arguments");
     return RMW_RET_INVALID_ARGUMENT;
+  }
+  if (!identifiers_match(source->implementation_identifier)) {
+    RMW_SET_ERROR_MSG("incorrect RMW implementation for source init options");
+    return RMW_RET_INCORRECT_RMW_IMPLEMENTATION;
   }
 
   rmw_init_options_t copy = rmw_get_zero_initialized_init_options();
@@ -360,6 +371,10 @@ rmw_ret_t rmw_init_options_fini(rmw_init_options_t *init_options)
 {
   if (init_options == NULL) {
     RMW_SET_ERROR_MSG("init options are null");
+    return RMW_RET_INVALID_ARGUMENT;
+  }
+  if (init_options->implementation_identifier == NULL) {
+    RMW_SET_ERROR_MSG("init options are not initialized");
     return RMW_RET_INVALID_ARGUMENT;
   }
   if (!identifiers_match(init_options->implementation_identifier)) {
@@ -412,11 +427,14 @@ static bool get_domain_id(const rmw_init_options_t *options, size_t *domain_id)
 
 rmw_ret_t rmw_init(const rmw_init_options_t *options, rmw_context_t *context)
 {
-  if (options == NULL || context == NULL ||
-      !identifiers_match(options->implementation_identifier) || context->impl != NULL ||
-      !allocator_is_valid(&options->allocator) || options->enclave == NULL) {
+  if (options == NULL || context == NULL || options->implementation_identifier == NULL ||
+      context->impl != NULL || !allocator_is_valid(&options->allocator) || options->enclave == NULL) {
     RMW_SET_ERROR_MSG("invalid RMW initialization arguments");
     return RMW_RET_INVALID_ARGUMENT;
+  }
+  if (!identifiers_match(options->implementation_identifier)) {
+    RMW_SET_ERROR_MSG("incorrect RMW implementation for init options");
+    return RMW_RET_INCORRECT_RMW_IMPLEMENTATION;
   }
 
   size_t domain_id = 0U;
@@ -480,10 +498,13 @@ rmw_ret_t rmw_init(const rmw_init_options_t *options, rmw_context_t *context)
 
 rmw_ret_t rmw_shutdown(rmw_context_t *context)
 {
-  if (context == NULL || !identifiers_match(context->implementation_identifier) ||
-      context->impl == NULL) {
+  if (context == NULL || context->implementation_identifier == NULL || context->impl == NULL) {
     RMW_SET_ERROR_MSG("invalid context for shutdown");
     return RMW_RET_INVALID_ARGUMENT;
+  }
+  if (!identifiers_match(context->implementation_identifier)) {
+    RMW_SET_ERROR_MSG("incorrect RMW implementation for context");
+    return RMW_RET_INCORRECT_RMW_IMPLEMENTATION;
   }
   context->impl->shutdown = true;
   return map_dds_result(dds_set_guardcondition(context->impl->graph_guard_entity, true),
@@ -492,9 +513,16 @@ rmw_ret_t rmw_shutdown(rmw_context_t *context)
 
 rmw_ret_t rmw_context_fini(rmw_context_t *context)
 {
-  if (context == NULL || !identifiers_match(context->implementation_identifier) ||
-      context->impl == NULL || !context->impl->shutdown) {
-    RMW_SET_ERROR_MSG("context must be initialized and shut down before finalization");
+  if (context == NULL || context->implementation_identifier == NULL || context->impl == NULL) {
+    RMW_SET_ERROR_MSG("invalid context for finalization");
+    return RMW_RET_INVALID_ARGUMENT;
+  }
+  if (!identifiers_match(context->implementation_identifier)) {
+    RMW_SET_ERROR_MSG("incorrect RMW implementation for context");
+    return RMW_RET_INCORRECT_RMW_IMPLEMENTATION;
+  }
+  if (!context->impl->shutdown) {
+    RMW_SET_ERROR_MSG("context must be shut down before finalization");
     return RMW_RET_INVALID_ARGUMENT;
   }
 
@@ -523,6 +551,17 @@ rmw_node_t *rmw_create_node(rmw_context_t *context, const char *name, const char
     RMW_SET_ERROR_MSG("invalid node creation arguments");
     return NULL;
   }
+  int validation_result = 0;
+  if (rmw_validate_node_name(name, &validation_result, NULL) != RMW_RET_OK ||
+      validation_result != RMW_NODE_NAME_VALID) {
+    RMW_SET_ERROR_MSG("invalid node name");
+    return NULL;
+  }
+  if (rmw_validate_namespace(namespace_, &validation_result, NULL) != RMW_RET_OK ||
+      validation_result != RMW_NAMESPACE_VALID) {
+    RMW_SET_ERROR_MSG("invalid node namespace");
+    return NULL;
+  }
   rcutils_allocator_t *allocator = &context->impl->allocator;
   rmw_node_t *node = allocate_zeroed(allocator, sizeof(*node));
   if (node == NULL) {
@@ -548,6 +587,14 @@ rmw_node_t *rmw_create_node(rmw_context_t *context, const char *name, const char
 
 rmw_ret_t rmw_destroy_node(rmw_node_t *node)
 {
+  if (node == NULL || node->implementation_identifier == NULL) {
+    RMW_SET_ERROR_MSG("invalid node");
+    return RMW_RET_INVALID_ARGUMENT;
+  }
+  if (!identifiers_match(node->implementation_identifier)) {
+    RMW_SET_ERROR_MSG("incorrect RMW implementation for node");
+    return RMW_RET_INCORRECT_RMW_IMPLEMENTATION;
+  }
   rmw_context_impl_t *implementation = context_impl_from_node(node);
   if (implementation == NULL) {
     return RMW_RET_INVALID_ARGUMENT;
@@ -1088,10 +1135,13 @@ fail:
 
 rmw_ret_t rmw_destroy_wait_set(rmw_wait_set_t *wait_set)
 {
-  if (wait_set == NULL || !identifiers_match(wait_set->implementation_identifier) ||
-      wait_set->data == NULL) {
+  if (wait_set == NULL || wait_set->implementation_identifier == NULL || wait_set->data == NULL) {
     RMW_SET_ERROR_MSG("invalid wait set");
     return RMW_RET_INVALID_ARGUMENT;
+  }
+  if (!identifiers_match(wait_set->implementation_identifier)) {
+    RMW_SET_ERROR_MSG("incorrect RMW implementation for wait set");
+    return RMW_RET_INCORRECT_RMW_IMPLEMENTATION;
   }
   wait_set_data_t *data = wait_set->data;
   rcutils_allocator_t allocator = data->allocator;
