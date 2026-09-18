@@ -57,10 +57,22 @@ int main(void)
     goto cleanup_support;
   }
 
-  rmw_qos_profile_t transient_local_qos = rmw_qos_profile_sensor_data;
-  transient_local_qos.durability = RMW_QOS_POLICY_DURABILITY_TRANSIENT_LOCAL;
+  rmw_qos_profile_t keep_all_qos = rmw_qos_profile_sensor_data;
+  keep_all_qos.history = RMW_QOS_POLICY_HISTORY_KEEP_ALL;
   if (expect_creation_failure(&node, ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, UInt32),
-                              "transient_local_rejected", transient_local_qos) != 0) {
+                              "keep_all_rejected", keep_all_qos) != 0) {
+    goto cleanup_node;
+  }
+  rmw_qos_profile_t zero_depth_qos = rmw_qos_profile_sensor_data;
+  zero_depth_qos.depth = 0U;
+  if (expect_creation_failure(&node, ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, UInt32),
+                              "zero_depth_rejected", zero_depth_qos) != 0) {
+    goto cleanup_node;
+  }
+  rmw_qos_profile_t default_durability_qos = rmw_qos_profile_sensor_data;
+  default_durability_qos.durability = RMW_QOS_POLICY_DURABILITY_SYSTEM_DEFAULT;
+  if (expect_creation_failure(&node, ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, UInt32),
+                              "default_durability_rejected", default_durability_qos) != 0) {
     goto cleanup_node;
   }
   if (expect_creation_failure(&node, ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32),
@@ -105,8 +117,8 @@ int main(void)
     goto cleanup_wait_set;
   }
 
-  printf("RMW_CYCLONEDDS_C_CONTRACT_PASS transient_local=rejected type=rejected timeout=passed "
-         "guard=passed\n");
+  printf("RMW_CYCLONEDDS_C_CONTRACT_PASS keep_all=rejected zero_depth=rejected "
+         "default_durability=rejected type=rejected timeout=passed guard=passed\n");
   result = 0;
 
 cleanup_wait_set:

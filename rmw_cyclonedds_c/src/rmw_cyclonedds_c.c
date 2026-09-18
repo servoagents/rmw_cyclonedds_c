@@ -202,11 +202,12 @@ static bool qos_is_supported(const rmw_qos_profile_t *qos)
       qos->depth > (size_t)INT32_MAX ||
       (qos->reliability != RMW_QOS_POLICY_RELIABILITY_BEST_EFFORT &&
        qos->reliability != RMW_QOS_POLICY_RELIABILITY_RELIABLE) ||
-      qos->durability != RMW_QOS_POLICY_DURABILITY_VOLATILE ||
+      (qos->durability != RMW_QOS_POLICY_DURABILITY_VOLATILE &&
+       qos->durability != RMW_QOS_POLICY_DURABILITY_TRANSIENT_LOCAL) ||
       qos->avoid_ros_namespace_conventions) {
     RMW_SET_ERROR_MSG(
-        "The supported profile accepts ROS naming, best-effort or reliable, volatile, keep-last "
-        "QoS only");
+        "The supported profile accepts ROS naming, best-effort or reliable, volatile or "
+        "transient-local, finite keep-last QoS only");
     return false;
   }
   return true;
@@ -243,7 +244,7 @@ static bool set_type_hash_user_data(dds_qos_t *dds_qos,
   return true;
 }
 
-static dds_qos_t *create_dds_qos(const rmw_qos_profile_t *qos,
+static dds_qos_t *create_dds_qos(const rmw_qos_profile_t *qos, bool writer,
                                  const rosidl_message_type_support_t *type_support)
 {
   dds_qos_t *dds_qos = dds_create_qos();
@@ -257,7 +258,14 @@ static dds_qos_t *create_dds_qos(const rmw_qos_profile_t *qos,
   } else {
     dds_qset_reliability(dds_qos, DDS_RELIABILITY_BEST_EFFORT, DDS_MSECS(0));
   }
-  dds_qset_durability(dds_qos, DDS_DURABILITY_VOLATILE);
+  dds_qset_durability(dds_qos, qos->durability == RMW_QOS_POLICY_DURABILITY_TRANSIENT_LOCAL
+                                   ? DDS_DURABILITY_TRANSIENT_LOCAL
+                                   : DDS_DURABILITY_VOLATILE);
+  if (writer && qos->durability == RMW_QOS_POLICY_DURABILITY_TRANSIENT_LOCAL) {
+    dds_qset_durability_service(dds_qos, 0, DDS_HISTORY_KEEP_LAST, (int32_t)qos->depth,
+                                DDS_LENGTH_UNLIMITED, DDS_LENGTH_UNLIMITED,
+                                DDS_LENGTH_UNLIMITED);
+  }
   if (!set_type_hash_user_data(dds_qos, type_support)) {
     dds_delete_qos(dds_qos);
     return NULL;
@@ -702,7 +710,7 @@ rmw_publisher_t *rmw_create_publisher(const rmw_node_t *node,
   }
   endpoint_data_t *endpoint = allocate_zeroed(&context->allocator, sizeof(*endpoint));
   char *dds_topic_name = make_dds_topic_name(&context->allocator, topic_name);
-  dds_qos_t *dds_qos = create_dds_qos(qos, type_support);
+  dds_qos_t *dds_qos = create_dds_qos(qos, true, type_support);
   if (endpoint == NULL || dds_topic_name == NULL || dds_qos == NULL) {
     goto fail;
   }
@@ -892,7 +900,7 @@ rmw_subscription_t *rmw_create_subscription(const rmw_node_t *node,
   }
   endpoint_data_t *endpoint = allocate_zeroed(&context->allocator, sizeof(*endpoint));
   char *dds_topic_name = make_dds_topic_name(&context->allocator, topic_name);
-  dds_qos_t *dds_qos = create_dds_qos(qos, type_support);
+  dds_qos_t *dds_qos = create_dds_qos(qos, false, type_support);
   if (endpoint == NULL || dds_topic_name == NULL || dds_qos == NULL) {
     goto fail;
   }

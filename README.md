@@ -16,12 +16,13 @@ desktop RMW.
 | Capability | Status |
 | --- | --- |
 | Publishers and subscriptions | Supported |
-| Best-effort or reliable, volatile, keep-last QoS | Supported |
+| Best-effort or reliable QoS | Supported |
+| Volatile, finite keep-last QoS | Supported |
+| Transient-local, finite keep-last QoS | Implemented; runtime acceptance pending |
 | Scalar and fixed-array messages | Supported |
 | Nested fixed-size messages | Supported |
 | DDS-backed waits and guard conditions | Supported |
 | Interoperability with `rmw_cyclonedds_cpp` | Tested on ROS 2 Kilted |
-| Transient-local QoS | Not supported |
 | Strings and variable-size sequences | Not supported |
 | Services, clients, and actions | Not supported |
 | Remote graph queries and DDS Security | Not supported |
@@ -54,8 +55,10 @@ directions against stock `rmw_cyclonedds_cpp`. The stock implementation is an
 interoperability reference, not the behavioral specification: the RMW API,
 ROS 2 semantics, and DDS semantics define the contract. The Reliable lane also
 drops the first sample on the publisher's network interface and verifies that
-the same sample is delivered after Cyclone retransmits it. Results are written
-below `results/`.
+the same sample is delivered after Cyclone retransmits it. The Transient Local
+lane is set up to start each publisher first, then verify retained history and
+a live sample at depths 1 and 3 with both a C RMW peer and stock
+`rmw_cyclonedds_cpp`. Results are written below `results/`.
 
 The Lyrical migration currently covers compilation, the loader ABI, the RMW
 smoke test, and negative/timeout/guard-condition contracts:
@@ -82,9 +85,18 @@ colcon test-result --verbose
 
 Set `RMW_IMPLEMENTATION=rmw_cyclonedds_c` before running an application.
 The package test runner covers the self-contained smoke, contract, and
-best-effort/reliable C-to-C tests. Stock-RMW interoperability, network fault
-injection, cross-distribution checks, and hardware runs remain explicit
-orchestration scripts.
+best-effort/reliable C-to-C tests and the Transient Local late-joiner contract.
+Stock-RMW interoperability, network fault injection, cross-distribution
+checks, and hardware runs remain explicit orchestration scripts.
+
+The focused Transient Local interoperability lane is:
+
+```sh
+scripts/run_transient_local.sh
+```
+
+See [the Transient Local profile](docs/transient-local.md) for the supported
+boundary and acceptance cases.
 
 The implementation-neutral ROS `test_rmw_implementation` suite is tracked as
 a separate conformance lane. Tests for the supported profile must pass;
