@@ -38,7 +38,22 @@ semantics remain the specification.
 
 ## Acceptance state
 
-The implementation and all Linux and Zephyr targets compile. The late-joiner,
-stock-peer, memory-growth, and physical ESP32-S3 runs remain pending until the
-test phase. Do not infer runtime behavior or memory cost from successful
-compilation.
+The C-to-C late-joiner cases pass on Linux at depths 1 and 3. On ROS 2 Kilted,
+the stock `rmw_cyclonedds_cpp` matrix also passes in both directions at both
+depths. The Reliable deterministic-loss lane passes independently and the
+package tests verify endpoint cleanup after each case.
+
+Stock Lyrical desktop interop is outside that Linux result because its
+TypeInformation-enabled endpoints hit the member-name mismatch described in
+[the Lyrical compatibility note](lyrical.md). This affects Best Effort,
+Reliable, and Transient Local equally; it is not a durability failure.
+
+On the accepted embedded boundary, an ESP32-S3 running Zephyr 4.4.2 passes
+against stock Lyrical in both directions at depths 1 and 3. Late subscribers
+receive `5, 6` at depth 1 and `3, 4, 5, 6` at depth 3. The board build disables
+Cyclone type discovery, as documented in the compatibility note and the
+`ros2_zephyr` Wi-Fi baseline.
+
+The Linux process snapshots used during the QoS freeze are diagnostic rather
+than allocator accounting. They do not replace the hardware allocator and
+stack measurements already recorded by `ros2_zephyr`.

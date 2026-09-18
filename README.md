@@ -18,11 +18,11 @@ desktop RMW.
 | Publishers and subscriptions | Supported |
 | Best-effort or reliable QoS | Supported |
 | Volatile, finite keep-last QoS | Supported |
-| Transient-local, finite keep-last QoS | Implemented; runtime acceptance pending |
+| Transient-local, finite keep-last QoS | Supported and tested at depths 1 and 3 |
 | Scalar and fixed-array messages | Supported |
 | Nested fixed-size messages | Supported |
 | DDS-backed waits and guard conditions | Supported |
-| Interoperability with `rmw_cyclonedds_cpp` | Tested on ROS 2 Kilted |
+| Interoperability with `rmw_cyclonedds_cpp` | Tested on Kilted and on the embedded Lyrical boundary |
 | Strings and variable-size sequences | Not supported |
 | Services, clients, and actions | Not supported |
 | Remote graph queries and DDS Security | Not supported |
@@ -97,6 +97,10 @@ scripts/run_transient_local.sh
 
 See [the Transient Local profile](docs/transient-local.md) for the supported
 boundary and acceptance cases.
+
+The stock graph wire contract has been characterized before graph support is
+implemented. See [the graph reference](docs/graph-reference.md) for the topic,
+type, QoS, serialization, GID representation, and lifecycle behavior.
 
 The implementation-neutral ROS `test_rmw_implementation` suite is tracked as
 a separate conformance lane. Tests for the supported profile must pass;

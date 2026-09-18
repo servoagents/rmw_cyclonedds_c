@@ -12,7 +12,8 @@ done < <(find "${repository_root}" -path "${repository_root}/.git" -prune \
   -o -type f -name '*.sh' -print0)
 
 python3 -m compileall -q \
-  "${repository_root}/rosidl_typesupport_cyclonedds_c"
+  "${repository_root}/rosidl_typesupport_cyclonedds_c" \
+  "${repository_root}/scripts"
 
 if command -v shellcheck >/dev/null; then
   find "${repository_root}" -path "${repository_root}/.git" -prune \
