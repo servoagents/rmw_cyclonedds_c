@@ -1,0 +1,25 @@
+// SPDX-License-Identifier: Apache-2.0
+
+module rmw_dds_common {
+module msg {
+module dds_ {
+
+struct Gid_ {
+  uint8 data[16];
+};
+
+struct NodeEntitiesInfo_ {
+  string<256> node_namespace;
+  string<256> node_name;
+  sequence<Gid_> reader_gid_seq;
+  sequence<Gid_> writer_gid_seq;
+};
+
+struct ParticipantEntitiesInfo_ {
+  Gid_ gid;
+  sequence<NodeEntitiesInfo_> node_entities_info_seq;
+};
+
+};
+};
+};

@@ -25,10 +25,29 @@ set(RMW_CYCLONEDDS_C_URI
     ""
     CACHE STRING "Cyclone DDS XML used when CYCLONEDDS_URI is unavailable"
 )
+set(RMW_CYCLONEDDS_C_GRAPH_MAX_NODES
+    8
+    CACHE STRING "Maximum number of local nodes in one graph announcement"
+)
+set(RMW_CYCLONEDDS_C_GRAPH_MAX_ENDPOINTS_PER_NODE
+    16
+    CACHE STRING "Maximum local publishers or subscriptions associated with one node"
+)
+foreach(graph_limit RMW_CYCLONEDDS_C_GRAPH_MAX_NODES
+                    RMW_CYCLONEDDS_C_GRAPH_MAX_ENDPOINTS_PER_NODE)
+  if(NOT "${${graph_limit}}" MATCHES "^[1-9][0-9]*$")
+    message(FATAL_ERROR "${graph_limit} must be a positive integer")
+  endif()
+endforeach()
 
 idlc_generate(
   TARGET uint32_dds_type_support FILES "${CMAKE_CURRENT_SOURCE_DIR}/idl/UInt32_.idl" WARNINGS
   no-implicit-extensibility
+)
+idlc_generate(
+  TARGET graph_dds_type_support
+  FILES "${CMAKE_CURRENT_SOURCE_DIR}/idl/ParticipantEntitiesInfo_.idl"
+  WARNINGS no-implicit-extensibility
 )
 
 set(_rmw_library_type SHARED)
@@ -37,6 +56,11 @@ if(ROS2_ZEPHYR_STATIC_BUILD)
 endif()
 add_library(${PROJECT_NAME} ${_rmw_library_type} src/rmw_cyclonedds_c.c src/rmw_unsupported.c)
 target_compile_options(${PROJECT_NAME} PRIVATE -Wall -Wextra -Wconversion -Werror)
+target_compile_definitions(
+  ${PROJECT_NAME}
+  PRIVATE RMW_CYCLONEDDS_C_GRAPH_MAX_NODES=${RMW_CYCLONEDDS_C_GRAPH_MAX_NODES}
+          RMW_CYCLONEDDS_C_GRAPH_MAX_ENDPOINTS_PER_NODE=${RMW_CYCLONEDDS_C_GRAPH_MAX_ENDPOINTS_PER_NODE}
+)
 if(NOT RMW_CYCLONEDDS_C_DEFAULT_DOMAIN_ID STREQUAL "")
   target_compile_definitions(
     ${PROJECT_NAME}
@@ -49,7 +73,8 @@ endif()
 set_source_files_properties(src/rmw_unsupported.c PROPERTIES COMPILE_OPTIONS -Wno-unused-parameter)
 target_link_libraries(
   ${PROJECT_NAME}
-  PRIVATE $<BUILD_INTERFACE:uint32_dds_type_support> CycloneDDS::ddsc rmw::rmw
+  PRIVATE $<BUILD_INTERFACE:uint32_dds_type_support> $<BUILD_INTERFACE:graph_dds_type_support>
+          CycloneDDS::ddsc rmw::rmw
           rosidl_runtime_c::rosidl_runtime_c rosidl_typesupport_c::rosidl_typesupport_c
           ${std_msgs_TARGETS}
 )
@@ -68,7 +93,8 @@ if(BUILD_TESTING)
   add_executable(rmw_smoke_test test/trace_minimal_rclc.c)
   add_executable(uint32_interop test/interop_rclc.c)
   add_executable(contract_test test/contract_negative.c)
-  set(_rmw_test_targets rmw_smoke_test uint32_interop contract_test)
+  add_executable(graph_fixture test/graph_fixture.c)
+  set(_rmw_test_targets rmw_smoke_test uint32_interop contract_test graph_fixture)
   if(cyclonedds_c_test_msgs_FOUND AND rosidl_typesupport_cyclonedds_c_FOUND)
     add_executable(generated_rmw_test test/generated_rmw.c)
     add_executable(generated_interop test/generated_interop_rclc.c)
@@ -113,7 +139,7 @@ install(
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION bin
 )
-install(TARGETS uint32_dds_type_support ARCHIVE DESTINATION lib)
+install(TARGETS uint32_dds_type_support graph_dds_type_support ARCHIVE DESTINATION lib)
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
 ament_export_dependencies(CycloneDDS rmw rosidl_runtime_c rosidl_typesupport_c std_msgs)
