@@ -33,8 +33,23 @@ set(RMW_CYCLONEDDS_C_GRAPH_MAX_ENDPOINTS_PER_NODE
     16
     CACHE STRING "Maximum local publishers or subscriptions associated with one node"
 )
+set(RMW_CYCLONEDDS_C_GRAPH_CACHE_MAX_PARTICIPANTS
+    8
+    CACHE STRING "Maximum participants retained by the graph cache"
+)
+set(RMW_CYCLONEDDS_C_GRAPH_CACHE_MAX_NODES
+    16
+    CACHE STRING "Maximum nodes retained by the graph cache"
+)
+set(RMW_CYCLONEDDS_C_GRAPH_CACHE_MAX_ENDPOINTS
+    32
+    CACHE STRING "Maximum DDS endpoints retained by the graph cache"
+)
 foreach(graph_limit RMW_CYCLONEDDS_C_GRAPH_MAX_NODES
-                    RMW_CYCLONEDDS_C_GRAPH_MAX_ENDPOINTS_PER_NODE)
+                    RMW_CYCLONEDDS_C_GRAPH_MAX_ENDPOINTS_PER_NODE
+                    RMW_CYCLONEDDS_C_GRAPH_CACHE_MAX_PARTICIPANTS
+                    RMW_CYCLONEDDS_C_GRAPH_CACHE_MAX_NODES
+                    RMW_CYCLONEDDS_C_GRAPH_CACHE_MAX_ENDPOINTS)
   if(NOT "${${graph_limit}}" MATCHES "^[1-9][0-9]*$")
     message(FATAL_ERROR "${graph_limit} must be a positive integer")
   endif()
@@ -60,6 +75,9 @@ target_compile_definitions(
   ${PROJECT_NAME}
   PRIVATE RMW_CYCLONEDDS_C_GRAPH_MAX_NODES=${RMW_CYCLONEDDS_C_GRAPH_MAX_NODES}
           RMW_CYCLONEDDS_C_GRAPH_MAX_ENDPOINTS_PER_NODE=${RMW_CYCLONEDDS_C_GRAPH_MAX_ENDPOINTS_PER_NODE}
+          RMW_CYCLONEDDS_C_GRAPH_CACHE_MAX_PARTICIPANTS=${RMW_CYCLONEDDS_C_GRAPH_CACHE_MAX_PARTICIPANTS}
+          RMW_CYCLONEDDS_C_GRAPH_CACHE_MAX_NODES=${RMW_CYCLONEDDS_C_GRAPH_CACHE_MAX_NODES}
+          RMW_CYCLONEDDS_C_GRAPH_CACHE_MAX_ENDPOINTS=${RMW_CYCLONEDDS_C_GRAPH_CACHE_MAX_ENDPOINTS}
 )
 if(NOT RMW_CYCLONEDDS_C_DEFAULT_DOMAIN_ID STREQUAL "")
   target_compile_definitions(
@@ -94,7 +112,10 @@ if(BUILD_TESTING)
   add_executable(uint32_interop test/interop_rclc.c)
   add_executable(contract_test test/contract_negative.c)
   add_executable(graph_fixture test/graph_fixture.c)
-  set(_rmw_test_targets rmw_smoke_test uint32_interop contract_test graph_fixture)
+  add_executable(graph_query_fixture test/graph_query_fixture.c)
+  set(_rmw_test_targets rmw_smoke_test uint32_interop contract_test graph_fixture
+                        graph_query_fixture
+  )
   if(cyclonedds_c_test_msgs_FOUND AND rosidl_typesupport_cyclonedds_c_FOUND)
     add_executable(generated_rmw_test test/generated_rmw.c)
     add_executable(generated_interop test/generated_interop_rclc.c)
@@ -111,6 +132,9 @@ if(BUILD_TESTING)
       target_link_libraries(${test_target} PRIVATE ${cyclonedds_c_test_msgs_TARGETS})
     endif()
   endforeach()
+  target_link_libraries(
+    graph_query_fixture PRIVATE CycloneDDS::ddsc $<BUILD_INTERFACE:uint32_dds_type_support>
+  )
 
   function(add_rmw_cyclonedds_c_test test_name target_name domain_id)
     ament_add_test(

@@ -22,11 +22,11 @@ desktop RMW.
 | Scalar and fixed-array messages | Supported |
 | Nested fixed-size messages | Supported |
 | DDS-backed waits and guard conditions | Supported |
-| Local graph announcements | Supported; visible to stock ROS graph tools |
+| ROS graph announcements and basic queries | Supported with bounded caches |
 | Interoperability with `rmw_cyclonedds_cpp` | Tested on Kilted and on the embedded Lyrical boundary |
 | Strings and variable-size sequences | Not supported |
 | Services, clients, and actions | Not supported |
-| Remote graph reception, graph queries, and DDS Security | Not supported |
+| Extended graph queries and DDS Security | Not supported |
 
 Unsupported policies and message shapes are rejected explicitly. The library
 exports the complete RMW loader ABI required by ROS 2 Kilted and Lyrical, but
@@ -53,7 +53,8 @@ scripts/test.sh
 It builds all three packages, checks generator and RMW contracts, verifies the
 loader ABI, and tests best-effort and reliable communication in both wire
 directions against stock `rmw_cyclonedds_cpp`. It also checks local graph
-topologies and endpoint lifecycles through the stock ROS CLI. The stock
+topologies through the stock ROS CLI and queries stock remote graph
+lifecycles through the C RMW. The stock
 implementation is an interoperability reference, not the behavioral
 specification: the RMW API, ROS 2 semantics, and DDS semantics define the
 contract. The Reliable lane also drops the first sample on the publisher's
@@ -101,13 +102,16 @@ scripts/run_transient_local.sh
 See [the Transient Local profile](docs/transient-local.md) for the supported
 boundary and acceptance cases.
 
-The stock graph wire contract and the bounded outbound implementation are
+The stock graph wire contract and the bounded graph implementations are
 documented in [the graph reference](docs/graph-reference.md) and
-[the outbound graph profile](docs/graph-outbound.md). Run its stock CLI and
-lifecycle matrix with:
+[the outbound graph profile](docs/graph-outbound.md). The selected inbound
+query APIs and cache limits are documented in
+[the inbound graph profile](docs/graph-inbound.md). Run both interoperability
+matrices with:
 
 ```sh
 scripts/run_graph_outbound.sh
+scripts/run_graph_inbound.sh
 ```
 
 The implementation-neutral ROS `test_rmw_implementation` suite is tracked as

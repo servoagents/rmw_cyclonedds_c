@@ -12,13 +12,17 @@
 #include <dds/dds.h>
 #include <rcutils/allocator.h>
 #include <rcutils/error_handling.h>
+#include <rcutils/types/string_array.h>
 #include <rmw/discovery_options.h>
 #include <rmw/enclave.h>
 #include <rmw/error_handling.h>
 #include <rmw/init.h>
 #include <rmw/init_options.h>
+#include <rmw/names_and_types.h>
 #include <rmw/rmw.h>
+#include <rmw/sanity_checks.h>
 #include <rmw/security_options.h>
+#include <rmw/validate_full_topic_name.h>
 #include <rmw/validate_namespace.h>
 #include <rmw/validate_node_name.h>
 #include <rosidl_runtime_c/message_type_support_struct.h>
@@ -45,6 +49,8 @@ typedef struct rosidl_typesupport_cyclonedds_c__message_type_support_callbacks_s
 
 static const char implementation_identifier[] = "rmw_cyclonedds_c";
 static const char serialization_format[] = "cdr";
+static const char graph_type_hash[] =
+    "typehash=RIHS01_91a0593bacdcc50ea9bdcf849a938b128412cc1ea821245c663bcd26f83c295e;";
 
 #ifndef RMW_CYCLONEDDS_C_GRAPH_MAX_NODES
 #define RMW_CYCLONEDDS_C_GRAPH_MAX_NODES 8U
@@ -52,8 +58,20 @@ static const char serialization_format[] = "cdr";
 #ifndef RMW_CYCLONEDDS_C_GRAPH_MAX_ENDPOINTS_PER_NODE
 #define RMW_CYCLONEDDS_C_GRAPH_MAX_ENDPOINTS_PER_NODE 16U
 #endif
+#ifndef RMW_CYCLONEDDS_C_GRAPH_CACHE_MAX_PARTICIPANTS
+#define RMW_CYCLONEDDS_C_GRAPH_CACHE_MAX_PARTICIPANTS 8U
+#endif
+#ifndef RMW_CYCLONEDDS_C_GRAPH_CACHE_MAX_NODES
+#define RMW_CYCLONEDDS_C_GRAPH_CACHE_MAX_NODES 16U
+#endif
+#ifndef RMW_CYCLONEDDS_C_GRAPH_CACHE_MAX_ENDPOINTS
+#define RMW_CYCLONEDDS_C_GRAPH_CACHE_MAX_ENDPOINTS 32U
+#endif
 
-enum { GRAPH_STRING_BOUND = 256U };
+enum {
+  GRAPH_STRING_BOUND = 256U,
+  GRAPH_DISCOVERY_BATCH = 16U,
+};
 
 _Static_assert(RMW_GID_STORAGE_SIZE >= sizeof(dds_guid_t),
                "rmw_gid_t is too small for a Cyclone DDS GUID");
@@ -89,11 +107,33 @@ typedef struct guard_condition_data_s {
   rcutils_allocator_t allocator;
 } guard_condition_data_t;
 
+typedef struct graph_cache_node_s {
+  dds_guid_t participant_guid;
+  char name[GRAPH_STRING_BOUND + 1U];
+  char namespace_[GRAPH_STRING_BOUND + 1U];
+  dds_guid_t readers[RMW_CYCLONEDDS_C_GRAPH_MAX_ENDPOINTS_PER_NODE];
+  dds_guid_t writers[RMW_CYCLONEDDS_C_GRAPH_MAX_ENDPOINTS_PER_NODE];
+  size_t reader_count;
+  size_t writer_count;
+} graph_cache_node_t;
+
+typedef struct graph_cache_endpoint_s {
+  dds_guid_t guid;
+  dds_guid_t participant_guid;
+  char topic_name[GRAPH_STRING_BOUND + 1U];
+  char type_name[GRAPH_STRING_BOUND + 1U];
+  bool writer;
+} graph_cache_endpoint_t;
+
 struct rmw_context_impl_s {
   dds_entity_t domain;
   dds_entity_t participant;
   dds_entity_t graph_topic;
   dds_entity_t graph_writer;
+  dds_entity_t graph_reader;
+  dds_entity_t participant_reader;
+  dds_entity_t publication_reader;
+  dds_entity_t subscription_reader;
   dds_entity_t graph_guard_entity;
   rmw_guard_condition_t graph_guard;
   dds_guid_t participant_guid;
@@ -108,6 +148,13 @@ struct rmw_context_impl_s {
   node_data_t *graph_node_owners[RMW_CYCLONEDDS_C_GRAPH_MAX_NODES];
   size_t graph_node_count;
   atomic_flag graph_lock;
+  dds_guid_t cached_participants[RMW_CYCLONEDDS_C_GRAPH_CACHE_MAX_PARTICIPANTS];
+  graph_cache_node_t cached_nodes[RMW_CYCLONEDDS_C_GRAPH_CACHE_MAX_NODES];
+  graph_cache_endpoint_t cached_endpoints[RMW_CYCLONEDDS_C_GRAPH_CACHE_MAX_ENDPOINTS];
+  size_t cached_participant_count;
+  size_t cached_node_count;
+  size_t cached_endpoint_count;
+  atomic_flag graph_cache_lock;
   rcutils_allocator_t allocator;
   bool shutdown;
 };
@@ -164,6 +211,370 @@ static void unlock_graph(rmw_context_impl_t *context)
   atomic_flag_clear_explicit(&context->graph_lock, memory_order_release);
 }
 
+static void lock_graph_cache(rmw_context_impl_t *context)
+{
+  while (atomic_flag_test_and_set_explicit(&context->graph_cache_lock, memory_order_acquire)) {
+  }
+}
+
+static void unlock_graph_cache(rmw_context_impl_t *context)
+{
+  atomic_flag_clear_explicit(&context->graph_cache_lock, memory_order_release);
+}
+
+static bool graph_guid_equal(const dds_guid_t *left, const dds_guid_t *right)
+{
+  return memcmp(left->v, right->v, sizeof(left->v)) == 0;
+}
+
+static void graph_cache_signal(rmw_context_impl_t *context)
+{
+  if (context->graph_guard_entity > 0) {
+    (void)dds_set_guardcondition(context->graph_guard_entity, true);
+  }
+}
+
+static void graph_cache_report_limit(const char *resource)
+{
+  fprintf(stderr, "RMW_CYCLONEDDS_C_GRAPH_LIMIT resource=%s\n", resource);
+}
+
+static bool graph_string_fits(const char *value)
+{
+  if (value == NULL) {
+    return false;
+  }
+  for (size_t index = 0U; index <= GRAPH_STRING_BOUND; ++index) {
+    if (value[index] == '\0') {
+      return true;
+    }
+  }
+  return false;
+}
+
+static size_t graph_cache_find_participant_locked(const rmw_context_impl_t *context,
+                                                  const dds_guid_t *guid)
+{
+  for (size_t index = 0U; index < context->cached_participant_count; ++index) {
+    if (graph_guid_equal(&context->cached_participants[index], guid)) {
+      return index;
+    }
+  }
+  return context->cached_participant_count;
+}
+
+static rmw_ret_t graph_cache_add_participant_locked(rmw_context_impl_t *context,
+                                                    const dds_guid_t *guid)
+{
+  if (graph_cache_find_participant_locked(context, guid) < context->cached_participant_count) {
+    return RMW_RET_OK;
+  }
+  if (context->cached_participant_count == RMW_CYCLONEDDS_C_GRAPH_CACHE_MAX_PARTICIPANTS) {
+    graph_cache_report_limit("participants");
+    return RMW_RET_ERROR;
+  }
+  context->cached_participants[context->cached_participant_count] = *guid;
+  ++context->cached_participant_count;
+  return RMW_RET_OK;
+}
+
+static rmw_ret_t graph_cache_add_participant(rmw_context_impl_t *context, const dds_guid_t *guid)
+{
+  lock_graph_cache(context);
+  const rmw_ret_t result = graph_cache_add_participant_locked(context, guid);
+  unlock_graph_cache(context);
+  if (result == RMW_RET_OK) {
+    graph_cache_signal(context);
+  }
+  return result;
+}
+
+static void graph_cache_remove_participant(rmw_context_impl_t *context, const dds_guid_t *guid)
+{
+  lock_graph_cache(context);
+  const size_t participant_index = graph_cache_find_participant_locked(context, guid);
+  if (participant_index < context->cached_participant_count) {
+    for (size_t index = participant_index; index + 1U < context->cached_participant_count; ++index) {
+      context->cached_participants[index] = context->cached_participants[index + 1U];
+    }
+    --context->cached_participant_count;
+    memset(&context->cached_participants[context->cached_participant_count], 0,
+           sizeof(context->cached_participants[0]));
+  }
+
+  size_t destination = 0U;
+  for (size_t source = 0U; source < context->cached_node_count; ++source) {
+    if (!graph_guid_equal(&context->cached_nodes[source].participant_guid, guid)) {
+      if (destination != source) {
+        context->cached_nodes[destination] = context->cached_nodes[source];
+      }
+      ++destination;
+    }
+  }
+  memset(&context->cached_nodes[destination], 0,
+         (context->cached_node_count - destination) * sizeof(context->cached_nodes[0]));
+  context->cached_node_count = destination;
+
+  destination = 0U;
+  for (size_t source = 0U; source < context->cached_endpoint_count; ++source) {
+    if (!graph_guid_equal(&context->cached_endpoints[source].participant_guid, guid)) {
+      if (destination != source) {
+        context->cached_endpoints[destination] = context->cached_endpoints[source];
+      }
+      ++destination;
+    }
+  }
+  memset(&context->cached_endpoints[destination], 0,
+         (context->cached_endpoint_count - destination) * sizeof(context->cached_endpoints[0]));
+  context->cached_endpoint_count = destination;
+  unlock_graph_cache(context);
+  graph_cache_signal(context);
+}
+
+static rmw_ret_t graph_cache_apply_snapshot(
+    rmw_context_impl_t *context,
+    const rmw_dds_common_msg_dds__ParticipantEntitiesInfo_ *sample)
+{
+  const size_t incoming_nodes = sample->node_entities_info_seq._length;
+  if (incoming_nodes > RMW_CYCLONEDDS_C_GRAPH_CACHE_MAX_NODES) {
+    graph_cache_report_limit("nodes-per-snapshot");
+    return RMW_RET_ERROR;
+  }
+  for (size_t index = 0U; index < incoming_nodes; ++index) {
+    const rmw_dds_common_msg_dds__NodeEntitiesInfo_ *node =
+        &sample->node_entities_info_seq._buffer[index];
+    if (node->reader_gid_seq._length > RMW_CYCLONEDDS_C_GRAPH_MAX_ENDPOINTS_PER_NODE ||
+        node->writer_gid_seq._length > RMW_CYCLONEDDS_C_GRAPH_MAX_ENDPOINTS_PER_NODE) {
+      graph_cache_report_limit("endpoints-per-node");
+      return RMW_RET_ERROR;
+    }
+    if (!graph_string_fits(node->node_name) || !graph_string_fits(node->node_namespace)) {
+      graph_cache_report_limit("node-name");
+      return RMW_RET_ERROR;
+    }
+  }
+
+  dds_guid_t participant_guid;
+  memcpy(participant_guid.v, sample->gid.data, sizeof(participant_guid.v));
+  lock_graph_cache(context);
+  size_t replaced_nodes = 0U;
+  for (size_t index = 0U; index < context->cached_node_count; ++index) {
+    if (graph_guid_equal(&context->cached_nodes[index].participant_guid, &participant_guid)) {
+      ++replaced_nodes;
+    }
+  }
+  if (context->cached_node_count - replaced_nodes + incoming_nodes >
+      RMW_CYCLONEDDS_C_GRAPH_CACHE_MAX_NODES) {
+    unlock_graph_cache(context);
+    graph_cache_report_limit("nodes");
+    return RMW_RET_ERROR;
+  }
+  if (graph_cache_add_participant_locked(context, &participant_guid) != RMW_RET_OK) {
+    unlock_graph_cache(context);
+    return RMW_RET_ERROR;
+  }
+
+  size_t destination = 0U;
+  for (size_t source = 0U; source < context->cached_node_count; ++source) {
+    if (!graph_guid_equal(&context->cached_nodes[source].participant_guid, &participant_guid)) {
+      if (destination != source) {
+        context->cached_nodes[destination] = context->cached_nodes[source];
+      }
+      ++destination;
+    }
+  }
+  context->cached_node_count = destination;
+
+  for (size_t index = 0U; index < incoming_nodes; ++index) {
+    const rmw_dds_common_msg_dds__NodeEntitiesInfo_ *source =
+        &sample->node_entities_info_seq._buffer[index];
+    graph_cache_node_t *target = &context->cached_nodes[context->cached_node_count];
+    memset(target, 0, sizeof(*target));
+    target->participant_guid = participant_guid;
+    memcpy(target->name, source->node_name, strlen(source->node_name) + 1U);
+    memcpy(target->namespace_, source->node_namespace, strlen(source->node_namespace) + 1U);
+    target->reader_count = source->reader_gid_seq._length;
+    target->writer_count = source->writer_gid_seq._length;
+    for (size_t endpoint = 0U; endpoint < target->reader_count; ++endpoint) {
+      memcpy(target->readers[endpoint].v, source->reader_gid_seq._buffer[endpoint].data,
+             sizeof(target->readers[endpoint].v));
+    }
+    for (size_t endpoint = 0U; endpoint < target->writer_count; ++endpoint) {
+      memcpy(target->writers[endpoint].v, source->writer_gid_seq._buffer[endpoint].data,
+             sizeof(target->writers[endpoint].v));
+    }
+    ++context->cached_node_count;
+  }
+  unlock_graph_cache(context);
+  graph_cache_signal(context);
+  return RMW_RET_OK;
+}
+
+static size_t graph_cache_find_endpoint_locked(const rmw_context_impl_t *context,
+                                               const dds_guid_t *guid)
+{
+  for (size_t index = 0U; index < context->cached_endpoint_count; ++index) {
+    if (graph_guid_equal(&context->cached_endpoints[index].guid, guid)) {
+      return index;
+    }
+  }
+  return context->cached_endpoint_count;
+}
+
+static bool graph_cache_endpoint_is_associated_locked(
+    const rmw_context_impl_t *context, const graph_cache_endpoint_t *endpoint)
+{
+  for (size_t node_index = 0U; node_index < context->cached_node_count; ++node_index) {
+    const graph_cache_node_t *node = &context->cached_nodes[node_index];
+    if (!graph_guid_equal(&node->participant_guid, &endpoint->participant_guid)) {
+      continue;
+    }
+    const dds_guid_t *gids = endpoint->writer ? node->writers : node->readers;
+    const size_t gid_count = endpoint->writer ? node->writer_count : node->reader_count;
+    for (size_t gid_index = 0U; gid_index < gid_count; ++gid_index) {
+      if (graph_guid_equal(&gids[gid_index], &endpoint->guid)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+static rmw_ret_t graph_cache_upsert_endpoint(rmw_context_impl_t *context, const dds_guid_t *guid,
+                                             const dds_guid_t *participant_guid,
+                                             const char *topic_name, const char *type_name,
+                                             bool writer)
+{
+  if (!graph_string_fits(topic_name) || !graph_string_fits(type_name)) {
+    graph_cache_report_limit("endpoint-name");
+    return RMW_RET_ERROR;
+  }
+  lock_graph_cache(context);
+  size_t index = graph_cache_find_endpoint_locked(context, guid);
+  if (index == context->cached_endpoint_count) {
+    if (context->cached_endpoint_count == RMW_CYCLONEDDS_C_GRAPH_CACHE_MAX_ENDPOINTS) {
+      unlock_graph_cache(context);
+      graph_cache_report_limit("endpoints");
+      return RMW_RET_ERROR;
+    }
+    ++context->cached_endpoint_count;
+  }
+  graph_cache_endpoint_t *endpoint = &context->cached_endpoints[index];
+  memset(endpoint, 0, sizeof(*endpoint));
+  endpoint->guid = *guid;
+  endpoint->participant_guid = *participant_guid;
+  endpoint->writer = writer;
+  memcpy(endpoint->topic_name, topic_name, strlen(topic_name) + 1U);
+  memcpy(endpoint->type_name, type_name, strlen(type_name) + 1U);
+  unlock_graph_cache(context);
+  graph_cache_signal(context);
+  return RMW_RET_OK;
+}
+
+static void graph_cache_remove_endpoint_guid(rmw_context_impl_t *context, const dds_guid_t *guid)
+{
+  lock_graph_cache(context);
+  const size_t index = graph_cache_find_endpoint_locked(context, guid);
+  if (index < context->cached_endpoint_count) {
+    for (size_t source = index; source + 1U < context->cached_endpoint_count; ++source) {
+      context->cached_endpoints[source] = context->cached_endpoints[source + 1U];
+    }
+    --context->cached_endpoint_count;
+    memset(&context->cached_endpoints[context->cached_endpoint_count], 0,
+           sizeof(context->cached_endpoints[0]));
+  }
+  unlock_graph_cache(context);
+  graph_cache_signal(context);
+}
+
+static void graph_data_available(dds_entity_t reader, void *argument)
+{
+  rmw_context_impl_t *context = argument;
+  void *samples[GRAPH_DISCOVERY_BATCH] = {0};
+  dds_sample_info_t information[GRAPH_DISCOVERY_BATCH];
+  dds_return_t count;
+  while ((count = dds_take(reader, samples, information, GRAPH_DISCOVERY_BATCH,
+                           GRAPH_DISCOVERY_BATCH)) > 0) {
+    for (dds_return_t index = 0; index < count; ++index) {
+      if (information[index].valid_data) {
+        const rmw_dds_common_msg_dds__ParticipantEntitiesInfo_ *sample = samples[index];
+        if (memcmp(sample->gid.data, context->participant_guid.v, sizeof(sample->gid.data)) != 0) {
+          (void)graph_cache_apply_snapshot(context, sample);
+        }
+      }
+    }
+    (void)dds_return_loan(reader, samples, count);
+    memset(samples, 0, sizeof(samples));
+  }
+  if (count < 0) {
+    fprintf(stderr, "RMW_CYCLONEDDS_C_GRAPH_ERROR operation=take-graph code=%d\n", count);
+  }
+}
+
+static void participant_data_available(dds_entity_t reader, void *argument)
+{
+  rmw_context_impl_t *context = argument;
+  void *samples[GRAPH_DISCOVERY_BATCH] = {0};
+  dds_sample_info_t information[GRAPH_DISCOVERY_BATCH];
+  dds_return_t count;
+  while ((count = dds_take(reader, samples, information, GRAPH_DISCOVERY_BATCH,
+                           GRAPH_DISCOVERY_BATCH)) > 0) {
+    for (dds_return_t index = 0; index < count; ++index) {
+      const dds_builtintopic_participant_t *sample = samples[index];
+      if (sample == NULL || graph_guid_equal(&sample->key, &context->participant_guid)) {
+        continue;
+      }
+      if (information[index].valid_data) {
+        (void)graph_cache_add_participant(context, &sample->key);
+      } else if (information[index].instance_state != DDS_IST_ALIVE) {
+        graph_cache_remove_participant(context, &sample->key);
+      }
+    }
+    (void)dds_return_loan(reader, samples, count);
+    memset(samples, 0, sizeof(samples));
+  }
+  if (count < 0) {
+    fprintf(stderr, "RMW_CYCLONEDDS_C_GRAPH_ERROR operation=take-participants code=%d\n", count);
+  }
+}
+
+static void endpoint_data_available(dds_entity_t reader, rmw_context_impl_t *context, bool writer)
+{
+  void *samples[GRAPH_DISCOVERY_BATCH] = {0};
+  dds_sample_info_t information[GRAPH_DISCOVERY_BATCH];
+  dds_return_t count;
+  while ((count = dds_take(reader, samples, information, GRAPH_DISCOVERY_BATCH,
+                           GRAPH_DISCOVERY_BATCH)) > 0) {
+    for (dds_return_t index = 0; index < count; ++index) {
+      const dds_builtintopic_endpoint_t *sample = samples[index];
+      if (sample == NULL || graph_guid_equal(&sample->participant_key, &context->participant_guid)) {
+        continue;
+      }
+      if (information[index].valid_data) {
+        (void)graph_cache_upsert_endpoint(context, &sample->key, &sample->participant_key,
+                                          sample->topic_name, sample->type_name, writer);
+      } else if (information[index].instance_state != DDS_IST_ALIVE) {
+        graph_cache_remove_endpoint_guid(context, &sample->key);
+      }
+    }
+    (void)dds_return_loan(reader, samples, count);
+    memset(samples, 0, sizeof(samples));
+  }
+  if (count < 0) {
+    fprintf(stderr, "RMW_CYCLONEDDS_C_GRAPH_ERROR operation=take-endpoints code=%d\n", count);
+  }
+}
+
+static void publication_data_available(dds_entity_t reader, void *argument)
+{
+  endpoint_data_available(reader, argument, true);
+}
+
+static void subscription_data_available(dds_entity_t reader, void *argument)
+{
+  endpoint_data_available(reader, argument, false);
+}
+
 static void graph_reset_node(rmw_context_impl_t *context, size_t index)
 {
   rmw_dds_common_msg_dds__NodeEntitiesInfo_ *node = &context->graph_nodes[index];
@@ -185,8 +596,12 @@ static rmw_ret_t graph_publish_locked(rmw_context_impl_t *context)
   sample.node_entities_info_seq._maximum = RMW_CYCLONEDDS_C_GRAPH_MAX_NODES;
   sample.node_entities_info_seq._length = (uint32_t)context->graph_node_count;
   sample.node_entities_info_seq._buffer = context->graph_nodes;
-  return map_dds_result(dds_write(context->graph_writer, &sample),
-                        "dds_write graph announcement");
+  const rmw_ret_t result = map_dds_result(dds_write(context->graph_writer, &sample),
+                                          "dds_write graph announcement");
+  if (result == RMW_RET_OK) {
+    return graph_cache_apply_snapshot(context, &sample);
+  }
+  return result;
 }
 
 static bool graph_node_is_valid_locked(const rmw_context_impl_t *context,
@@ -360,8 +775,6 @@ static rmw_ret_t graph_remove_endpoint(rmw_context_impl_t *context, node_data_t 
 
 static rmw_ret_t create_graph_writer(rmw_context_impl_t *context)
 {
-  static const char graph_type_hash[] =
-      "typehash=RIHS01_91a0593bacdcc50ea9bdcf849a938b128412cc1ea821245c663bcd26f83c295e;";
   const dds_return_t guid_result = dds_get_guid(context->participant, &context->participant_guid);
   if (guid_result < 0) {
     return map_dds_result(guid_result, "dds_get_guid participant");
@@ -382,16 +795,69 @@ static rmw_ret_t create_graph_writer(rmw_context_impl_t *context)
   dds_qset_history(qos, DDS_HISTORY_KEEP_LAST, 1);
   dds_qset_reliability(qos, DDS_RELIABILITY_RELIABLE, DDS_INFINITY);
   dds_qset_durability(qos, DDS_DURABILITY_TRANSIENT_LOCAL);
+  dds_qset_userdata(qos, graph_type_hash, strlen(graph_type_hash));
   dds_qset_durability_service(qos, 0, DDS_HISTORY_KEEP_LAST, 1, DDS_LENGTH_UNLIMITED,
                               DDS_LENGTH_UNLIMITED, DDS_LENGTH_UNLIMITED);
   dds_qset_writer_data_lifecycle(qos, false);
-  dds_qset_userdata(qos, graph_type_hash, strlen(graph_type_hash));
   const dds_data_representation_id_t representation = DDS_DATA_REPRESENTATION_XCDR1;
   dds_qset_data_representation(qos, 1U, &representation);
   context->graph_writer = dds_create_writer(context->participant, context->graph_topic, qos, NULL);
   dds_delete_qos(qos);
   if (context->graph_writer < 0) {
     return map_dds_result(context->graph_writer, "dds_create_writer graph");
+  }
+  return RMW_RET_OK;
+}
+
+static dds_entity_t create_discovery_reader(rmw_context_impl_t *context, dds_entity_t topic,
+                                            const dds_qos_t *qos,
+                                            dds_on_data_available_fn callback)
+{
+  dds_listener_t *listener = dds_create_listener(context);
+  if (listener == NULL) {
+    RMW_SET_ERROR_MSG("dds_create_listener failed for graph discovery");
+    return DDS_RETCODE_OUT_OF_RESOURCES;
+  }
+  dds_lset_data_available(listener, callback);
+  const dds_entity_t reader = dds_create_reader(context->participant, topic, qos, listener);
+  dds_delete_listener(listener);
+  return reader;
+}
+
+static rmw_ret_t create_graph_readers(rmw_context_impl_t *context)
+{
+  dds_qos_t *qos = dds_create_qos();
+  if (qos == NULL) {
+    RMW_SET_ERROR_MSG("dds_create_qos failed for graph reader");
+    return RMW_RET_ERROR;
+  }
+  dds_qset_history(qos, DDS_HISTORY_KEEP_ALL, DDS_LENGTH_UNLIMITED);
+  dds_qset_reliability(qos, DDS_RELIABILITY_RELIABLE, DDS_INFINITY);
+  dds_qset_durability(qos, DDS_DURABILITY_TRANSIENT_LOCAL);
+  dds_qset_userdata(qos, graph_type_hash, strlen(graph_type_hash));
+  const dds_data_representation_id_t representation = DDS_DATA_REPRESENTATION_XCDR1;
+  dds_qset_data_representation(qos, 1U, &representation);
+  context->graph_reader =
+      create_discovery_reader(context, context->graph_topic, qos, graph_data_available);
+  dds_delete_qos(qos);
+  if (context->graph_reader < 0) {
+    return map_dds_result(context->graph_reader, "dds_create_reader graph");
+  }
+
+  context->participant_reader = create_discovery_reader(
+      context, DDS_BUILTIN_TOPIC_DCPSPARTICIPANT, NULL, participant_data_available);
+  if (context->participant_reader < 0) {
+    return map_dds_result(context->participant_reader, "dds_create_reader participants");
+  }
+  context->publication_reader = create_discovery_reader(
+      context, DDS_BUILTIN_TOPIC_DCPSPUBLICATION, NULL, publication_data_available);
+  if (context->publication_reader < 0) {
+    return map_dds_result(context->publication_reader, "dds_create_reader publications");
+  }
+  context->subscription_reader = create_discovery_reader(
+      context, DDS_BUILTIN_TOPIC_DCPSSUBSCRIPTION, NULL, subscription_data_available);
+  if (context->subscription_reader < 0) {
+    return map_dds_result(context->subscription_reader, "dds_create_reader subscriptions");
   }
   return RMW_RET_OK;
 }
@@ -734,6 +1200,7 @@ rmw_ret_t rmw_init(const rmw_init_options_t *options, rmw_context_t *context)
   }
   implementation->allocator = allocator;
   atomic_flag_clear(&implementation->graph_lock);
+  atomic_flag_clear(&implementation->graph_cache_lock);
   for (size_t index = 0U; index < RMW_CYCLONEDDS_C_GRAPH_MAX_NODES; ++index) {
     graph_reset_node(implementation, index);
   }
@@ -773,6 +1240,14 @@ rmw_ret_t rmw_init(const rmw_init_options_t *options, rmw_context_t *context)
   implementation->graph_guard.implementation_identifier = implementation_identifier;
   implementation->graph_guard.data = &implementation->graph_guard_entity;
   implementation->graph_guard.context = context;
+  if (graph_cache_add_participant(implementation, &implementation->participant_guid) !=
+          RMW_RET_OK ||
+      create_graph_readers(implementation) != RMW_RET_OK) {
+    (void)dds_delete(implementation->participant);
+    (void)dds_delete(implementation->domain);
+    allocator.deallocate(implementation, allocator.state);
+    return RMW_RET_ERROR;
+  }
 
   rmw_context_t initialized = rmw_get_zero_initialized_context();
   initialized.instance_id = options->instance_id;
@@ -934,6 +1409,346 @@ const rmw_guard_condition_t *rmw_node_get_graph_guard_condition(const rmw_node_t
   return implementation == NULL ? NULL : &implementation->graph_guard;
 }
 
+static rmw_ret_t graph_copy_output_string(rcutils_allocator_t *allocator, char **destination,
+                                          const char *source)
+{
+  const size_t length = strlen(source) + 1U;
+  *destination = allocator->allocate(length, allocator->state);
+  if (*destination == NULL) {
+    RMW_SET_ERROR_MSG("graph result string allocation failed");
+    return RMW_RET_BAD_ALLOC;
+  }
+  memcpy(*destination, source, length);
+  return RMW_RET_OK;
+}
+
+static rmw_ret_t graph_context_from_node(const rmw_node_t *node, rmw_context_impl_t **context)
+{
+  if (node == NULL) {
+    RMW_SET_ERROR_MSG("graph query node is null");
+    return RMW_RET_INVALID_ARGUMENT;
+  }
+  if (!identifiers_match(node->implementation_identifier)) {
+    RMW_SET_ERROR_MSG("incorrect RMW implementation for graph query");
+    return RMW_RET_INCORRECT_RMW_IMPLEMENTATION;
+  }
+  if (node->context == NULL || !identifiers_match(node->context->implementation_identifier) ||
+      node->context->impl == NULL) {
+    RMW_SET_ERROR_MSG("graph query node has no valid context");
+    return RMW_RET_INVALID_ARGUMENT;
+  }
+  *context = node->context->impl;
+  return RMW_RET_OK;
+}
+
+rmw_ret_t rmw_get_node_names(const rmw_node_t *node, rcutils_string_array_t *node_names,
+                             rcutils_string_array_t *node_namespaces)
+{
+  rmw_context_impl_t *context = NULL;
+  const rmw_ret_t node_result = graph_context_from_node(node, &context);
+  if (node_result != RMW_RET_OK) {
+    return node_result;
+  }
+  if (node_names == NULL || node_namespaces == NULL) {
+    RMW_SET_ERROR_MSG("node names output is null");
+    return RMW_RET_INVALID_ARGUMENT;
+  }
+  if (rmw_check_zero_rmw_string_array(node_names) != RMW_RET_OK ||
+      rmw_check_zero_rmw_string_array(node_namespaces) != RMW_RET_OK) {
+    return RMW_RET_INVALID_ARGUMENT;
+  }
+
+  rcutils_allocator_t allocator = rcutils_get_default_allocator();
+  lock_graph_cache(context);
+  const size_t count = context->cached_node_count;
+  if (rcutils_string_array_init(node_names, count, &allocator) != RCUTILS_RET_OK) {
+    unlock_graph_cache(context);
+    RMW_SET_ERROR_MSG("failed to initialize graph node names");
+    return RMW_RET_BAD_ALLOC;
+  }
+  if (rcutils_string_array_init(node_namespaces, count, &allocator) != RCUTILS_RET_OK) {
+    unlock_graph_cache(context);
+    const rcutils_ret_t cleanup = rcutils_string_array_fini(node_names);
+    (void)cleanup;
+    RMW_SET_ERROR_MSG("failed to initialize graph node namespaces");
+    return RMW_RET_BAD_ALLOC;
+  }
+
+  rmw_ret_t result = RMW_RET_OK;
+  for (size_t index = 0U; index < count; ++index) {
+    result = graph_copy_output_string(&allocator, &node_names->data[index],
+                                      context->cached_nodes[index].name);
+    if (result == RMW_RET_OK) {
+      result = graph_copy_output_string(&allocator, &node_namespaces->data[index],
+                                        context->cached_nodes[index].namespace_);
+    }
+    if (result != RMW_RET_OK) {
+      break;
+    }
+  }
+  unlock_graph_cache(context);
+  if (result != RMW_RET_OK) {
+    const rcutils_ret_t namespace_cleanup = rcutils_string_array_fini(node_namespaces);
+    const rcutils_ret_t name_cleanup = rcutils_string_array_fini(node_names);
+    (void)namespace_cleanup;
+    (void)name_cleanup;
+  }
+  return result;
+}
+
+static rmw_ret_t graph_validate_topic_count_arguments(const rmw_node_t *node,
+                                                      const char *topic_name, size_t *count,
+                                                      rmw_context_impl_t **context)
+{
+  const rmw_ret_t node_result = graph_context_from_node(node, context);
+  if (node_result != RMW_RET_OK) {
+    return node_result;
+  }
+  if (topic_name == NULL || count == NULL) {
+    RMW_SET_ERROR_MSG("invalid graph count arguments");
+    return RMW_RET_INVALID_ARGUMENT;
+  }
+  int validation_result = RMW_TOPIC_VALID;
+  const rmw_ret_t validation =
+      rmw_validate_full_topic_name(topic_name, &validation_result, NULL);
+  if (validation != RMW_RET_OK) {
+    return validation;
+  }
+  if (validation_result != RMW_TOPIC_VALID) {
+    RMW_SET_ERROR_MSG("topic name is invalid");
+    return RMW_RET_INVALID_ARGUMENT;
+  }
+  return RMW_RET_OK;
+}
+
+static rmw_ret_t graph_count_endpoints(const rmw_node_t *node, const char *topic_name,
+                                       size_t *count, bool writers)
+{
+  rmw_context_impl_t *context = NULL;
+  const rmw_ret_t validation =
+      graph_validate_topic_count_arguments(node, topic_name, count, &context);
+  if (validation != RMW_RET_OK) {
+    return validation;
+  }
+  char dds_topic[GRAPH_STRING_BOUND + 1U];
+  const int length = snprintf(dds_topic, sizeof(dds_topic), "rt%s", topic_name);
+  if (length < 0 || (size_t)length >= sizeof(dds_topic)) {
+    RMW_SET_ERROR_MSG("topic name exceeds the inbound graph bound");
+    return RMW_RET_INVALID_ARGUMENT;
+  }
+
+  *count = 0U;
+  lock_graph_cache(context);
+  for (size_t index = 0U; index < context->cached_endpoint_count; ++index) {
+    const graph_cache_endpoint_t *endpoint = &context->cached_endpoints[index];
+    if (graph_cache_endpoint_is_associated_locked(context, endpoint) &&
+        endpoint->writer == writers && strcmp(endpoint->topic_name, dds_topic) == 0) {
+      ++*count;
+    }
+  }
+  unlock_graph_cache(context);
+  return RMW_RET_OK;
+}
+
+rmw_ret_t rmw_count_publishers(const rmw_node_t *node, const char *topic_name, size_t *count)
+{
+  return graph_count_endpoints(node, topic_name, count, true);
+}
+
+rmw_ret_t rmw_count_subscribers(const rmw_node_t *node, const char *topic_name, size_t *count)
+{
+  return graph_count_endpoints(node, topic_name, count, false);
+}
+
+static bool graph_topic_output_name(const graph_cache_endpoint_t *endpoint, bool no_demangle,
+                                    char output[GRAPH_STRING_BOUND + 1U])
+{
+  if (strcmp(endpoint->topic_name, "ros_discovery_info") == 0) {
+    return false;
+  }
+  const char *source = endpoint->topic_name;
+  if (!no_demangle) {
+    if (strncmp(source, "rt/", 3U) != 0) {
+      return false;
+    }
+    source += 2;
+  }
+  memcpy(output, source, strlen(source) + 1U);
+  return true;
+}
+
+static void graph_type_output_name(const char *source, bool no_demangle,
+                                   char output[GRAPH_STRING_BOUND + 1U])
+{
+  const size_t source_length = strlen(source);
+  const char *marker = strstr(source, "dds_::");
+  if (no_demangle || marker == NULL || source_length == 0U || source[source_length - 1U] != '_') {
+    memcpy(output, source, source_length + 1U);
+    return;
+  }
+
+  size_t destination = 0U;
+  for (const char *cursor = source; cursor < marker;) {
+    if (cursor + 1 < marker && cursor[0] == ':' && cursor[1] == ':') {
+      output[destination++] = '/';
+      cursor += 2;
+    } else {
+      output[destination++] = *cursor++;
+    }
+  }
+  const char *type_name = marker + strlen("dds_::");
+  const size_t type_length = source_length - (size_t)(type_name - source) - 1U;
+  memcpy(&output[destination], type_name, type_length);
+  output[destination + type_length] = '\0';
+}
+
+static bool graph_endpoint_has_topic(const graph_cache_endpoint_t *endpoint, const char *topic,
+                                     bool no_demangle)
+{
+  char candidate[GRAPH_STRING_BOUND + 1U];
+  return graph_topic_output_name(endpoint, no_demangle, candidate) &&
+         strcmp(candidate, topic) == 0;
+}
+
+rmw_ret_t rmw_get_topic_names_and_types(const rmw_node_t *node, rcutils_allocator_t *allocator,
+                                        bool no_demangle,
+                                        rmw_names_and_types_t *topic_names_and_types)
+{
+  rmw_context_impl_t *context = NULL;
+  const rmw_ret_t node_result = graph_context_from_node(node, &context);
+  if (node_result != RMW_RET_OK) {
+    return node_result;
+  }
+  if (!allocator_is_valid(allocator) || topic_names_and_types == NULL) {
+    RMW_SET_ERROR_MSG("invalid topic names and types arguments");
+    return RMW_RET_INVALID_ARGUMENT;
+  }
+  if (rmw_names_and_types_check_zero(topic_names_and_types) != RMW_RET_OK) {
+    return RMW_RET_INVALID_ARGUMENT;
+  }
+
+  size_t representatives[RMW_CYCLONEDDS_C_GRAPH_CACHE_MAX_ENDPOINTS];
+  size_t topic_count = 0U;
+  lock_graph_cache(context);
+  for (size_t endpoint_index = 0U; endpoint_index < context->cached_endpoint_count;
+       ++endpoint_index) {
+    if (!graph_cache_endpoint_is_associated_locked(
+            context, &context->cached_endpoints[endpoint_index])) {
+      continue;
+    }
+    char topic[GRAPH_STRING_BOUND + 1U];
+    if (!graph_topic_output_name(&context->cached_endpoints[endpoint_index], no_demangle, topic)) {
+      continue;
+    }
+    bool duplicate = false;
+    for (size_t topic_index = 0U; topic_index < topic_count; ++topic_index) {
+      if (graph_endpoint_has_topic(&context->cached_endpoints[representatives[topic_index]], topic,
+                                   no_demangle)) {
+        duplicate = true;
+        break;
+      }
+    }
+    if (!duplicate) {
+      representatives[topic_count++] = endpoint_index;
+    }
+  }
+
+  rmw_ret_t result =
+      rmw_names_and_types_init(topic_names_and_types, topic_count, allocator);
+  if (result != RMW_RET_OK) {
+    unlock_graph_cache(context);
+    return result;
+  }
+
+  for (size_t topic_index = 0U; topic_index < topic_count && result == RMW_RET_OK; ++topic_index) {
+    char topic[GRAPH_STRING_BOUND + 1U];
+    (void)graph_topic_output_name(&context->cached_endpoints[representatives[topic_index]],
+                                  no_demangle, topic);
+    result = graph_copy_output_string(allocator, &topic_names_and_types->names.data[topic_index],
+                                      topic);
+    if (result != RMW_RET_OK) {
+      break;
+    }
+
+    size_t type_count = 0U;
+    for (size_t endpoint_index = 0U; endpoint_index < context->cached_endpoint_count;
+         ++endpoint_index) {
+      if (!graph_cache_endpoint_is_associated_locked(
+              context, &context->cached_endpoints[endpoint_index])) {
+        continue;
+      }
+      if (!graph_endpoint_has_topic(&context->cached_endpoints[endpoint_index], topic,
+                                    no_demangle)) {
+        continue;
+      }
+      char type[GRAPH_STRING_BOUND + 1U];
+      graph_type_output_name(context->cached_endpoints[endpoint_index].type_name, no_demangle,
+                             type);
+      bool duplicate = false;
+      for (size_t previous = 0U; previous < endpoint_index; ++previous) {
+        if (!graph_cache_endpoint_is_associated_locked(
+                context, &context->cached_endpoints[previous])) {
+          continue;
+        }
+        if (!graph_endpoint_has_topic(&context->cached_endpoints[previous], topic, no_demangle)) {
+          continue;
+        }
+        char previous_type[GRAPH_STRING_BOUND + 1U];
+        graph_type_output_name(context->cached_endpoints[previous].type_name, no_demangle,
+                               previous_type);
+        if (strcmp(previous_type, type) == 0) {
+          duplicate = true;
+          break;
+        }
+      }
+      if (!duplicate) {
+        ++type_count;
+      }
+    }
+
+    if (rcutils_string_array_init(&topic_names_and_types->types[topic_index], type_count,
+                                  allocator) != RCUTILS_RET_OK) {
+      RMW_SET_ERROR_MSG("failed to initialize graph topic types");
+      result = RMW_RET_BAD_ALLOC;
+      break;
+    }
+    size_t output_type = 0U;
+    for (size_t endpoint_index = 0U;
+         endpoint_index < context->cached_endpoint_count && result == RMW_RET_OK;
+         ++endpoint_index) {
+      if (!graph_cache_endpoint_is_associated_locked(
+              context, &context->cached_endpoints[endpoint_index])) {
+        continue;
+      }
+      if (!graph_endpoint_has_topic(&context->cached_endpoints[endpoint_index], topic,
+                                    no_demangle)) {
+        continue;
+      }
+      char type[GRAPH_STRING_BOUND + 1U];
+      graph_type_output_name(context->cached_endpoints[endpoint_index].type_name, no_demangle,
+                             type);
+      bool duplicate = false;
+      for (size_t previous = 0U; previous < output_type; ++previous) {
+        if (strcmp(topic_names_and_types->types[topic_index].data[previous], type) == 0) {
+          duplicate = true;
+          break;
+        }
+      }
+      if (!duplicate) {
+        result = graph_copy_output_string(
+            allocator, &topic_names_and_types->types[topic_index].data[output_type], type);
+        ++output_type;
+      }
+    }
+  }
+  unlock_graph_cache(context);
+  if (result != RMW_RET_OK) {
+    const rmw_ret_t cleanup = rmw_names_and_types_fini(topic_names_and_types);
+    (void)cleanup;
+  }
+  return result;
+}
+
 rmw_guard_condition_t *rmw_create_guard_condition(rmw_context_t *context)
 {
   if (context == NULL || !identifiers_match(context->implementation_identifier) ||
@@ -1056,6 +1871,11 @@ rmw_publisher_t *rmw_create_publisher(const rmw_node_t *node,
   if (graph_add_endpoint(context, node_data, &endpoint->guid, true) != RMW_RET_OK) {
     goto fail;
   }
+  if (graph_cache_upsert_endpoint(context, &endpoint->guid, &context->participant_guid,
+                                  dds_topic_name, callbacks->dds_type_name, true) != RMW_RET_OK) {
+    (void)graph_remove_endpoint(context, node_data, &endpoint->guid, true);
+    goto fail;
+  }
   dds_delete_qos(dds_qos);
   context->allocator.deallocate(dds_topic_name, context->allocator.state);
   publisher->data = endpoint;
@@ -1095,6 +1915,7 @@ rmw_ret_t rmw_destroy_publisher(rmw_node_t *node, rmw_publisher_t *publisher)
     return RMW_RET_INVALID_ARGUMENT;
   }
   endpoint_data_t *endpoint = publisher->data;
+  graph_cache_remove_endpoint_guid(context, &endpoint->guid);
   rmw_ret_t result = graph_remove_endpoint(context, endpoint->node, &endpoint->guid, true);
   const rmw_ret_t writer_result =
       map_dds_result(dds_delete(endpoint->endpoint), "dds_delete writer");
@@ -1259,6 +2080,11 @@ rmw_subscription_t *rmw_create_subscription(const rmw_node_t *node,
   if (graph_add_endpoint(context, node_data, &endpoint->guid, false) != RMW_RET_OK) {
     goto fail;
   }
+  if (graph_cache_upsert_endpoint(context, &endpoint->guid, &context->participant_guid,
+                                  dds_topic_name, callbacks->dds_type_name, false) != RMW_RET_OK) {
+    (void)graph_remove_endpoint(context, node_data, &endpoint->guid, false);
+    goto fail;
+  }
   dds_delete_qos(dds_qos);
   context->allocator.deallocate(dds_topic_name, context->allocator.state);
   subscription->data = endpoint;
@@ -1298,6 +2124,7 @@ rmw_ret_t rmw_destroy_subscription(rmw_node_t *node, rmw_subscription_t *subscri
     return RMW_RET_INVALID_ARGUMENT;
   }
   endpoint_data_t *endpoint = subscription->data;
+  graph_cache_remove_endpoint_guid(context, &endpoint->guid);
   rmw_ret_t result = graph_remove_endpoint(context, endpoint->node, &endpoint->guid, false);
   const rmw_ret_t condition_result =
       map_dds_result(dds_delete(endpoint->condition), "dds_delete condition");

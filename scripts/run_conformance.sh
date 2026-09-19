@@ -8,6 +8,7 @@ ros_distro="${RMW_CYCLONEDDS_C_ROS_DISTRO:-kilted}"
 image="${RMW_CYCLONEDDS_C_IMAGE:-servoagents/rmw-cyclonedds-c:${ros_distro}}"
 output_dir="${1:-${repository_root}/results/conformance-${ros_distro}}"
 test_pattern='^(test_init_shutdown|test_init_options|test_create_destroy_node|test_publisher_allocator|test_subscription_allocator)__rmw_cyclonedds_c$'
+graph_filter='TestGraphAPI.get_node_names_with_bad_arguments:TestGraphAPI.get_topic_names_and_types_with_bad_arguments:TestGraphAPI.count_publishers_with_bad_arguments:TestGraphAPI.count_subscribers_with_bad_arguments'
 
 mkdir -p "${output_dir}"
 
@@ -31,6 +32,10 @@ colcon --log-base /results/log build \
 ctest --test-dir /results/build/test_rmw_implementation \
   --output-on-failure \
   -R '${test_pattern}'
+export RMW_IMPLEMENTATION=rmw_cyclonedds_c
+export ROS_DOMAIN_ID=117
+/results/build/test_rmw_implementation/test_graph_api \
+  --gtest_filter='${graph_filter}'
 colcon --log-base /results/log-result test-result \
   --test-result-base /results/build/test_rmw_implementation \
   --verbose" |& tee "${output_dir}/summary.log"

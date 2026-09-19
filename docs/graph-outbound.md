@@ -1,9 +1,9 @@
 # Outbound ROS graph profile
 
 `rmw_cyclonedds_c` publishes the local participant snapshot expected by
-`rmw_dds_common`. This milestone is intentionally one-way: stock ROS nodes can
-see C RMW nodes and endpoints, but the C RMW does not yet subscribe to graph
-announcements or answer remote graph queries.
+`rmw_dds_common`. Stock ROS nodes can therefore see C RMW nodes and endpoints.
+Inbound discovery is described separately in
+[the inbound graph profile](graph-inbound.md).
 
 ## Representation
 
@@ -74,5 +74,4 @@ tests also remain green for Best Effort, Reliable, and Transient Local depths
 matches its dynamic graph type; the separate application-type XTypes mismatch
 described in [the Lyrical note](lyrical.md) is unchanged.
 
-Inbound graph state, graph query APIs, services, and actions are outside this
-milestone.
+Services and actions remain outside this profile.

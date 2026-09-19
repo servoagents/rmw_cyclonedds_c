@@ -65,17 +65,7 @@ rmw_ret_t rmw_count_clients(const rmw_node_t *node, const char *service_name, si
   return UNSUPPORTED();
 }
 
-rmw_ret_t rmw_count_publishers(const rmw_node_t *node, const char *topic_name, size_t *count)
-{
-  return UNSUPPORTED();
-}
-
 rmw_ret_t rmw_count_services(const rmw_node_t *node, const char *service_name, size_t *count)
-{
-  return UNSUPPORTED();
-}
-
-rmw_ret_t rmw_count_subscribers(const rmw_node_t *node, const char *topic_name, size_t *count)
 {
   return UNSUPPORTED();
 }
@@ -135,12 +125,6 @@ rmw_ret_t rmw_get_client_names_and_types_by_node(const rmw_node_t *node,
 }
 
 rmw_ret_t rmw_get_gid_for_client(const rmw_client_t *client, rmw_gid_t *gid)
-{
-  return UNSUPPORTED();
-}
-
-rmw_ret_t rmw_get_node_names(const rmw_node_t *node, rcutils_string_array_t *node_names,
-                             rcutils_string_array_t *node_namespaces)
 {
   return UNSUPPORTED();
 }
@@ -219,13 +203,6 @@ rmw_ret_t rmw_get_subscriptions_info_by_topic(const rmw_node_t *node,
                                               rcutils_allocator_t *allocator,
                                               const char *topic_name, bool no_mangle,
                                               rmw_topic_endpoint_info_array_t *subscriptions_info)
-{
-  return UNSUPPORTED();
-}
-
-rmw_ret_t rmw_get_topic_names_and_types(const rmw_node_t *node, rcutils_allocator_t *allocator,
-                                        bool no_demangle,
-                                        rmw_names_and_types_t *topic_names_and_types)
 {
   return UNSUPPORTED();
 }

@@ -13,9 +13,11 @@ kept for compatibility with prebuilt interface packages.
 
 The implementation accepts best-effort or reliable, volatile or
 transient-local, finite keep-last QoS. It publishes bounded local node and
-endpoint state on the standard ROS graph topic. It rejects strings and
-variable-size application sequences, content filters, loaned and serialized
-messages, services, clients, events, inbound graph queries, and DDS Security.
+endpoint state on the standard ROS graph topic and maintains a bounded remote
+cache for node names, topic names/types, and endpoint counts. It rejects
+strings and variable-size application sequences, content filters, loaned and
+serialized messages, services, clients, events, extended graph queries, and
+DDS Security.
 
 The dynamic ROS 2 loader resolves the complete RMW ABI. Entry points outside
 the supported profile are present but return `RMW_RET_UNSUPPORTED`, `NULL`, or

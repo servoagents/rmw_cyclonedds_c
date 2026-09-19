@@ -34,13 +34,15 @@ and JUnit files are written below `results/conformance-<distro>/`.
 | `test_publisher`, `test_subscription` | Not selected | Upstream `test_msgs` lacks this profile's generated fixed-size adapter; local generated-message tests cover supported endpoints. |
 | `test_serialize_deserialize` | Not selected | Serialized-message APIs are unsupported. |
 | `test_wait_set` | Not selected | The suite fixture requires unsupported services and events; local tests cover subscriptions, guard conditions, and timeouts. |
-| `test_graph_api` | Not selected | Remote graph queries are unsupported. |
+| `test_graph_api` | Four cases must pass | Bad-argument contracts for node names, topic names/types, and publisher/subscriber counts are supported; cases for extended graph APIs remain unselected. |
 | `test_unique_identifiers` | Not selected | The suite requires unsupported clients. |
 | `test_service`, `test_client` | Not selected | Services and clients are unsupported. |
 | `test_qos_profile_check_compatible` | Not selected | The compatibility-query API is unsupported. |
 | `test_duration_infinite` | Not selected | The suite uses an upstream message without this profile's generated adapter. |
 | `test_event` | Not selected | RMW events are unsupported. |
 
-An unselected suite is not counted as a pass. When its prerequisite API enters
-the supported profile, move it into the runner's must-pass set. Unexpected
-failures in the selected set are bugs.
+The graph cases run through a GTest filter because the upstream executable
+also exercises services, clients, enclaves, per-node queries, and endpoint
+information arrays. An unselected suite or case is not counted as a pass.
+When its prerequisite API enters the supported profile, move it into the
+runner's must-pass set. Unexpected failures in the selected set are bugs.

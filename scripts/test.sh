@@ -7,6 +7,7 @@ export RMW_CYCLONEDDS_C_ROS_DISTRO="${RMW_CYCLONEDDS_C_ROS_DISTRO:-kilted}"
 
 "${script_dir}/test_core.sh"
 "${script_dir}/run_graph_outbound.sh"
+"${script_dir}/run_graph_inbound.sh"
 "${script_dir}/run_uint32_interop.sh"
 "${script_dir}/run_generated_interop.sh"
 "${script_dir}/run_reliable_loss.sh"
