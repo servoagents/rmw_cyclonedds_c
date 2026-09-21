@@ -77,5 +77,8 @@ snapshot even after the node's DDS endpoints disappear. The C cache preserves
 that received snapshot rather than guessing that an endpoint-free node is
 dead; Kilted does not exhibit this behavior in the lifecycle matrix.
 
-Hardware acceptance and resource characterization belong to the next
-milestone.
+ESP32-S3 hardware acceptance completed against stock ROS 2 Lyrical on Zephyr
+4.4.0. The inbound run passed participant loss and restart across three
+participants, three nodes, and five remote endpoints; the complete graph and
+QoS matrix also passed in both directions. The accepted resource measurements
+and reproduction commands live in `ros2_zephyr/docs/graph-acceptance.md`.
